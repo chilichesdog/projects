@@ -74,9 +74,9 @@ string8 read_file(const char *path) {
   return out;
 }
 
-void write_file(const char *path, string8 in) {
+void write_file(const char *path, string8 input) {
   FILE *stream = fopen(path, "wb");
-  fwrite(in.str, 1, in.size, stream);
+  fwrite(input.str, 1, input.size, stream);
   fclose(stream);
 }
 
@@ -110,7 +110,7 @@ u32 read_little_end(string8 buffer, u64 byte_offset, u32 nbytes) {
     exit(EXIT_FAILURE);
   } else if (byte_offset >= buffer.size) {
     fprintf(stderr, "%s\n",
-            "read_little_end: offset cannot be larger than buffer size");
+            "read_little_end: offset is past the end of the buffer");
     exit(EXIT_FAILURE);
   } else if (byte_offset + nbytes > buffer.size) {
     nbytes = buffer.size - byte_offset;
