@@ -58,6 +58,10 @@ string8 read_file(const char *path) {
 
   fseek(f, 0, SEEK_END);
   u64 size = ftell(f);
+  if (size < 20) {
+    fprintf(stderr, "%s\n", "file too short");
+    exit(EXIT_FAILURE);
+  }
   fseek(f, 0, SEEK_SET);
 
   out.size = size;
@@ -82,13 +86,53 @@ void write_file(const char *path, string8 in) {
 #define FNAME 0b01000
 #define FCOMMENT 0b10000
 
+/**
+ * Reads up to 4 bytes of a u8 buffer and returns its value as a u32.
+ *
+ *
+ * Takes in a string8, offset, and number of bytes and returns its value as a
+ * u32. Calculated by bitshifting each byte by its place value in base-256 and
+ * machine running it. Designed for gzip because `.gz` files are little-endian
+ *
+ *
+ * @param buffer a string 8 with buffer and size.
+ * @param byte_offset offset to start from in the buffer.
+ * @param nbytes number of bytes <= 4 to read.
+ * @return the value as a u32
+ *
+ * @example
+ * // u32 read_little_end(str8, 32, 4)
+ * Write me later
+ */
+u32 read_little_end(string8 buffer, u64 byte_offset, u32 nbytes) {
+  if (nbytes > 4) {
+    fprintf(stderr, "%s\n", "read_little_end: nbytes cannot be higher than 4");
+    exit(EXIT_FAILURE);
+  } else if (byte_offset >= buffer.size) {
+    fprintf(stderr, "%s\n",
+            "read_little_end: offset cannot be larger than buffer size");
+    exit(EXIT_FAILURE);
+  } else if (byte_offset + nbytes > buffer.size) {
+    nbytes = buffer.size - byte_offset;
+    // there's an argument for handling this case differently:
+    // fprintf(stderr, "%s\n",
+    //         "read_little_end: cannot read past the end of the buffer");
+    // exit(EXIT_FAILURE);
+  }
+  u32 out = 0;
+  for (u32 i = 0; i < nbytes; i++) {
+    out |= ((u32)buffer.str[byte_offset + i] << (8 * i));
+  }
+  return out;
+}
+
 string8 gunzip(string8 input) {
   u8 flags = input.str[3];
 
   u32 block_offset = 10;
 
   if (flags & FEXTRA) {
-    u16 xlen = *(u16 *)(input.str + 10);
+    u16 xlen = (u16)read_little_end(input, 10, 2);
     block_offset += 2 + xlen;
   }
   if (flags & FNAME) {
@@ -102,7 +146,7 @@ string8 gunzip(string8 input) {
   if (flags & FHCRC) {
     block_offset += 2;
   }
-  u32 isize = *(u32 *)(input.str + input.size - 4);
+  u32 isize = read_little_end(input, input.size - 4, 4);
 
   string8 out = {.size = isize, .str = malloc(isize)};
 
@@ -161,7 +205,7 @@ u32 bs_peek(bitstream *bs, u8 nbits) {
   // so, this sets byte_pos to the index of the current byte
   u64 byte_pos = bs->bit_pos / 8;
   // set bits to the value in the file at byte_pos
-  u32 bits = *(u32 *)(bs->backing.str + byte_pos);
+  u32 bits = read_little_end(bs->backing, byte_pos, 4);
 
   // how far into the current byte
   bits >>= bs->bit_pos % 8;
