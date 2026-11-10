@@ -150,17 +150,11 @@ u32 bit_masks[] = {
 
 // this is slow because of unaligned memory reads
 // nbits <= 16
+
+/*
+ * Looks at the bit located `nbits` away
+ */
 u32 bs_peek(bitstream *bs, u8 nbits) {
-  u64 byte_pos = bs->bit_pos / 8;
-  u32 bits = *(u32 *)(bs->backing.str + byte_pos);
-
-  bits >>= bs->bit_pos % 8;
-
-  return bits & bit_masks[nbits];
-}
-
-// nbits <= 16
-u32 bs_take(bitstream *bs, u8 nbits) {
   // C infers the type of division it should do; if the operands are both
   // integers, it discards the fractional part of the answer
 
@@ -171,6 +165,16 @@ u32 bs_take(bitstream *bs, u8 nbits) {
 
   // how far into the current byte
   bits >>= bs->bit_pos % 8;
+
+  return bits & bit_masks[nbits];
+}
+
+// nbits <= 16
+/**
+ * Advances bit position by `nbits`
+ */
+u32 bs_take(bitstream *bs, u8 nbits) {
+  u32 bits = bs_peek(bs, nbits);
   // advance bit_pos by nbits
   bs->bit_pos += nbits;
 
