@@ -1,0 +1,12 @@
+[workspace]
+authors = ["Jacob Chesney 244109208+chilichesdog@users.noreply.github.com"]
+channels = ["https://conda.modular.com/max", "conda-forge"]
+name = "projects"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+mojo = ">=1.2.0,<2"
+valgrind = ">=3.27.1,<4"
