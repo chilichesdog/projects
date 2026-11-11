@@ -1,5 +1,6 @@
 from std import os
 from std.memory import Layout, Allocation
+from std.sys import argv
 
 comptime FTEXT = 0b00001
 comptime FHCRC = 0b00010
@@ -16,32 +17,21 @@ struct String8:
 
 
 def main() raises:
-    var test0_gz = FileHandle("gzip/test0.gz", "r")
-    var test1_gz = FileHandle("gzip/test1.gz", "r")
-    var img_gz = FileHandle("gzip/IMG_1586.jpeg.gz", "r")
-    var tiny_gz = FileHandle("gzip/tiny.gz", "r")
+    var args: Span[StringSpan[ImmStaticOrigin], ImmStaticOrigin] = argv()
+    # var path: StringSpan[ImmStaticOrigin] = args[1]
+    # var dest: StringSpan[ImmStaticOrigin] = args[2]
+    var path = Pointer(to=args[1])
+    var dest = Pointer(to=args[2])
+    var handle = FileHandle(path[unsafe_offset=0], "r")
+    var file_gz = read_file(handle)
 
-    var test0: String8
-    var test1: String8
-    var img: String8
-    var tiny: String8
-
-    # test0.size = test0_gz.seek(0, os.SEEK_END)
-    # _ = test0_gz.seek(0, 0)
-    # test0.str = Pointer(to=test0_gz.read())
-    # test1.size = test0_gz.seek(0, os.SEEK_END)
-    # _ = test1_gz.seek(0, 0)
-    # test1.str = Pointer(to=test1_gz.read_bytes())
-    # img.size = test0_gz.seek(0, os.SEEK_END)
-    # _ = img_gz.seek(0, 0)
-    # img.str = Pointer(to=img_gz.read_bytes())
-    #
-    # gunzip(img)
+    print(file_gz.size)
 
 
 def read_file(input: FileHandle) raises -> String8:
-    var size: UInt64
-    size = input.seek(0, os.SEEK_END)
+    "Read the bytes of a `.gz` file."
+    var size: UInt64 = input.seek(0, os.SEEK_END)
+
     _ = input.seek(0, os.SEEK_SET)
 
     # tried using .unsafe_ptr() but that leaves Allocation as the owner.
@@ -51,8 +41,8 @@ def read_file(input: FileHandle) raises -> String8:
         Layout[UInt8](count=Int(size))
     ).unsafe_leak()
     var spn = Span[UInt8, MutUntrackedOrigin](unsafe_ptr=str, length=Int(size))
-    # input.read() writes into the Pointer that the Span references so there is no need to explicitly write into str
 
+    # input.read() writes into the Pointer that the Span references so there is no need to explicitly write into str
     var length: Int = input.read(spn)
     if length != Int(size):
         raise Error("file size does not match read bytes")
