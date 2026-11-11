@@ -21,28 +21,29 @@ def main() raises:
     # var path: StringSpan[ImmStaticOrigin] = args[1]
     # var dest: StringSpan[ImmStaticOrigin] = args[2]
     var path = Pointer(to=args[1])
-    var dest = Pointer(to=args[2])
+    # var dest = Pointer(to=args[2])
     var handle = FileHandle(path[unsafe_offset=0], "r")
     var file_gz = read_file(handle)
 
-    print(file_gz.size)
+    print()
 
 
 def read_file(input: FileHandle) raises -> String8:
-    "Read the bytes of a `.gz` file."
+    """Reads the bytes of a `.gz` file."""
     var size: UInt64 = input.seek(0, os.SEEK_END)
 
     _ = input.seek(0, os.SEEK_SET)
 
     # tried using .unsafe_ptr() but that leaves Allocation as the owner.
-    # use .unsafe_leak() bc it consumes the Allocation without freeing the memory
-    # but you have to manually free the memory later
+    # use .unsafe_leak() bc it consumes the Allocation without freeing the
+    # memory but you have to manually free the memory later
     var str: Pointer[UInt8, MutUntrackedOrigin] = alloc(
         Layout[UInt8](count=Int(size))
     ).unsafe_leak()
     var spn = Span[UInt8, MutUntrackedOrigin](unsafe_ptr=str, length=Int(size))
 
-    # input.read() writes into the Pointer that the Span references so there is no need to explicitly write into str
+    # input.read() writes into the Pointer that the Span references so there is
+    # no need to explicitly write into str
     var length: Int = input.read(spn)
     if length != Int(size):
         raise Error("file size does not match read bytes")
@@ -56,8 +57,41 @@ def write_file(path: String, input: String8):
 
 def read_little_end(
     buffer: String8, byte_offset: UInt64, nbytes: UInt32
-) -> UInt32:
-    return 0
+) raises -> UInt32:
+    """Reads up to 4 little-endian bytes as a `UInt32`.
+
+    If `nbytes` would force a read past the end of the buffer, it reads only
+    the bytes that are left.
+
+    Args:
+        buffer: A `String8` with buffer and size.
+        byte_offset: Offset to start from in the buffer.
+        nbytes: Number of bytes <= 4 to read.
+
+    Returns:
+        The value as a `UInt32`.
+
+    Raises:
+        Error: If `nbytes` is over 4 or `byte_offset` is past the end of the
+            buffer.
+    """
+
+    var n: UInt32 = nbytes
+    if n > 4:
+        raise "read_little_end: nbytes cannot be higher than 4"
+    elif byte_offset >= buffer.size:
+        raise "read_little_end: offset is past the end of the buffer"
+    elif byte_offset + UInt64(n) > buffer.size:
+        n = UInt32(buffer.size - byte_offset)
+
+    var output: UInt32 = 0
+    for i in range(n):
+        var byte = buffer.str[unsafe_offset=byte_offset + UInt64(i)]
+        var shifted = UInt32(byte) << (8 * i)
+
+        output |= shifted
+
+    return output
 
 
 def gunzip(input: String8):
