@@ -320,3 +320,116 @@ def _huff_impl(
     dist_nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin],
 ):
     ...
+
+
+@fieldwise_init
+struct ClLutNode:
+    var code_len: UInt8
+    var bits_used: UInt8
+    var extra_bits: UInt8
+    var repeat_base: UInt8
+
+
+comptime cl_extras: Array[UInt8, 19] = [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    2,
+    3,
+    7,
+]
+
+comptime cl_bases: Array[UInt8, 19] = [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    3,
+    3,
+    11,
+]
+
+comptime cl_order: Array[UInt8, 19] = [
+    16,
+    17,
+    18,
+    0,
+    8,
+    7,
+    9,
+    6,
+    10,
+    5,
+    11,
+    4,
+    12,
+    3,
+    13,
+    2,
+    14,
+    1,
+    15,
+]
+
+
+def _dyn_next_cl(
+    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    nodes: GenericHuffNode,
+    node_pos: Pointer[mut=True, UInt32, MutUntrackedOrigin],
+    cl_lut: ClLutNode,
+    prev_codelen: UInt8,
+):
+    ...
+
+
+def _dynamic_block(
+    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
+    pos: UInt64,
+):
+    ...
+
+
+def _fixed_block(
+    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
+    pos: UInt64,
+):
+    ...
+
+
+def _stored_block(
+    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
+    pos: UInt64,
+):
+    ...
+
+
+def inflate(input: String8, output: String8):
+    ...
