@@ -10,7 +10,7 @@ comptime FCOMMENT = 0b10000
 
 
 @fieldwise_init
-struct String8:
+struct String8(ImplicitlyCopyable):
     var str: Pointer[mut=False, UInt8, ImmUntrackedOrigin]
     # var str: Pointer[mut=True,UInt8,origin=MutUnsafeAnyOrigin]
     var size: UInt64
@@ -133,14 +133,14 @@ def reverse_bits(n: UInt16, bits: UInt16):
 
 
 @fieldwise_init
-struct Bitstream:
+struct Bitstream(ImplicitlyCopyable):
     var backing: String8
     var bit_pos: UInt64
     var bit_size: UInt64
 
 
-def bs_init(backing: String8):
-    ...
+def bs_init(backing: String8) -> Bitstream:
+    return Bitstream(backing=backing, bit_pos=0, bit_size=backing.size * 8)
 
 
 comptime bit_masks: Array[UInt32, 17] = [
