@@ -184,7 +184,7 @@ comptime bit_masks: Array[UInt32, 17] = [
 
 
 def bs_peek(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
-    """Looks at the bit located `nbits` away."""
+    """Returns the next `nbits` bits without advancing."""
     var byte_pos: UInt64 = bs.bit_pos / 8
     var bits: UInt32 = read_little_end(bs.backing, byte_pos, 4)
     bits >>= UInt32(bs.bit_pos) % 8
@@ -193,7 +193,7 @@ def bs_peek(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
 
 
 def bs_take(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
-    """Advances bit position by `nbits`"""
+    """Advances bit position by `nbits`."""
     var bits: UInt32 = bs_peek(bs, nbits)
     bs.bit_pos += UInt64(nbits)
 
