@@ -94,7 +94,18 @@ def read_little_end(
     return output
 
 
-def gunzip(input: String8) raises:
+def skip_null_term(input: String8, block_offset: UInt32) -> UInt32:
+    """Returns the offset after the terminator."""
+    var offset: UInt32 = block_offset
+    while True:
+        var byte = input.str[unsafe_offset=offset]
+        offset += 1
+        if byte == 0:
+            break
+    return offset
+
+
+def gunzip(input: String8) raises -> String8:
     # this is how mojo looks at the pointee value
     # don't confuse with ptr.unsafe_offset(x) which returns a pointer offset by x
     var flags: UInt8 = input.str[unsafe_offset=3]
@@ -103,20 +114,28 @@ def gunzip(input: String8) raises:
     # going past the headers
     if (flags & FEXTRA) != 0:
         var xlen = UInt16(read_little_end(input, 10, 2))
-
         block_offset += 2 + UInt32(xlen)
     if (flags & FNAME) != 0:
-        while input.str[unsafe_offset=block_offset]:
-            block_offset += 1
+        block_offset = skip_null_term(input, block_offset)
     if (flags & FCOMMENT) != 0:
-        while input.str[unsafe_offset=block_offset]:
-            block_offset += 1
+        block_offset = skip_null_term(input, block_offset)
     if (flags & FHCRC) != 0:
         block_offset += 2
 
     var isize: UInt32 = read_little_end(input, input.size - 4, 4)
 
-    print(isize)
+    var output = String8(
+        size=UInt64(isize),
+        str=alloc(Layout[UInt8](count=Int(isize))).unsafe_leak(),
+    )
+
+    var deflate_block = String8(
+        size=input.size - UInt64(block_offset) - 8,
+        str=input.str.unsafe_offset(block_offset),
+    )
+    inflate(deflate_block, output)
+
+    return output
 
 
 def reverse_u16(n: UInt16) -> UInt16:
