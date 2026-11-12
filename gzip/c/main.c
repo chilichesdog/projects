@@ -535,6 +535,7 @@ u64 _stored_block(bitstream *bs, u8 *out, u64 pos) {
 }
 
 void inflate(string8 input, string8 out) {
+  // Why is there a pos in the switch/case block?
   bitstream bs = bs_init(input);
 
   u64 pos = 0;
