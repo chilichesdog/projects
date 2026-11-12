@@ -18,14 +18,16 @@ struct String8(ImplicitlyCopyable):
 
 def main() raises:
     var args: Span[StringSpan[ImmStaticOrigin], ImmStaticOrigin] = argv()
-    # var path: StringSpan[ImmStaticOrigin] = args[1]
-    # var dest: StringSpan[ImmStaticOrigin] = args[2]
-    var path = Pointer(to=args[1])
+    if len(args) != 3:
+        raise "Args must be: input output"
+    var path: StringSpan[ImmStaticOrigin] = args[1]
+    var dest: StringSpan[ImmStaticOrigin] = args[2]
+    # var path = Pointer(to=args[1])
     # var dest = Pointer(to=args[2])
-    var handle = FileHandle(path[unsafe_offset=0], "r")
+    var handle = FileHandle(path, "r")
     var file_gz = read_file(handle)
-
-    print()
+    var file = gunzip(file_gz)
+    write_file(dest, file)
 
 
 def read_file(input: FileHandle) raises -> String8:
@@ -51,8 +53,10 @@ def read_file(input: FileHandle) raises -> String8:
         return String8(str=str, size=size)
 
 
-def write_file(path: String, input: String8):
-    ...
+def write_file(path: String, input: String8) raises:
+    with FileHandle(path, "w") as stream:
+        stream.write(input.str)
+    # closes automatically
 
 
 def read_little_end(
