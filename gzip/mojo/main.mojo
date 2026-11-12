@@ -11,7 +11,7 @@ comptime FCOMMENT = 0b10000
 
 @fieldwise_init
 struct String8(ImplicitlyCopyable):
-    var str: Pointer[mut=False, UInt8, ImmUntrackedOrigin]
+    var str: Pointer[mut=True, UInt8, MutUntrackedOrigin]
     # var str: Pointer[mut=True,UInt8,origin=MutUnsafeAnyOrigin]
     var size: UInt64
 
@@ -453,11 +453,24 @@ def _fixed_block(
 
 
 def _stored_block(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    pos: UInt64,
-):
-    ...
+    mut pos: UInt64,
+) raises -> UInt64:
+    if bs.bit_pos % 8 != 0:
+        bs.bit_pos += 8 - bs.bit_pos % 8
+
+    var LEN: UInt16 = UInt16(bs_take(bs, 16))
+    var NLEN: UInt16 = UInt16(bs_take(bs, 16))
+    if LEN != ~NLEN:
+        raise "Error: not aligned to the byte. Check _stored_block"
+
+    for _ in range(LEN):
+        output[unsafe_offset=pos] = bs.backing.str[unsafe_offset=bs.bit_pos / 8]
+        bs.bit_pos += 8
+        pos += 1
+
+    return pos
 
 
 def inflate(input: String8, output: String8) raises:
@@ -472,6 +485,7 @@ def inflate(input: String8, output: String8) raises:
         match block_type:
             case 0b00:
                 # stored block
+                pos = _stored_block(bs, output.str, pos)
                 break
             case 0b01:
                 # fixed block
