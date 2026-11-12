@@ -94,7 +94,7 @@ def read_little_end(
     return output
 
 
-def gunzip(input: String8):
+def gunzip(input: String8) raises:
     # this is how mojo looks at the pointee value
     # don't confuse with ptr.unsafe_offset(x) which returns a pointer offset by x
     var flags: UInt8 = input.str[unsafe_offset=3]
@@ -102,9 +102,7 @@ def gunzip(input: String8):
 
     # going past the headers
     if (flags & FEXTRA) != 0:
-        var xlen_ptr = input.str.unsafe_offset(10)
-        var xlen_u16_ptr = xlen_ptr.unsafe_bitcast[Scalar[DType.uint16]]()
-        var xlen = xlen_u16_ptr.unsafe_load[alignment=1]()
+        var xlen = UInt16(read_little_end(input, 10, 2))
 
         block_offset += 2 + UInt32(xlen)
     if (flags & FNAME) != 0:
@@ -116,9 +114,7 @@ def gunzip(input: String8):
     if (flags & FHCRC) != 0:
         block_offset += 2
 
-    var isize_ptr = input.str.unsafe_offset(Int(input.size) - 4)
-    var isize_u16_ptr = isize_ptr.unsafe_bitcast[Scalar[DType.uint32]]()
-    var isize = isize_u16_ptr.unsafe_load[alignment=1]()
+    var isize: UInt32 = read_little_end(input, input.size - 4, 4)
 
     print(isize)
 
