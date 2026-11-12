@@ -164,12 +164,23 @@ comptime bit_masks: Array[UInt32, 17] = [
 ]
 
 
-def bs_peek(bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin], nbits: UInt8):
-    ...
+def bs_peek[nbits: UInt8](bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin])raises->UInt32:
+    """Looks at the bit located `nbits` away.
+    """
+    var byte_pos: UInt64= bs[].bit_pos/8
+    var bits: UInt32=read_little_end(bs[].backing,byte_pos,4)
+    bits >>= UInt32(bs[].bit_pos)%8
+
+    return bits & materialize[bit_masks[nbits]]()
 
 
-def bs_take(bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin], nbits: UInt8):
-    ...
+def bs_take[nbits: UInt8](bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin])raises->UInt32:
+    """Advances bit position by `nbits`"""
+    var bits: UInt32=bs_peek[nbits](bs)
+    bs[].bit_pos += UInt64( nbits )
+
+    return bits&materialize[bit_masks[nbits]]()
+
 
 
 @fieldwise_init
@@ -452,4 +463,9 @@ def _stored_block(
 
 
 def inflate(input: String8, output: String8):
-    ...
+    var bs: Bitstream = bs_init(input)
+    var pos: UInt64 = 0
+
+    var last_block: Bool = False
+    while not last_block:
+
