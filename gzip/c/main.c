@@ -320,6 +320,8 @@ u64 _huff_impl(bitstream *bs, u8 *out, u64 pos, generic_huff_node *ll_nodes,
     ll_lut_node lut_node = {
         .code = i,
         .bits_used = len,
+        // ternary operator: cond ? t : f
+        // just an if/else that produces a value
         .extra_bits = i < 257 ? 0 : ll_extras[i - 257],
         .length_base = i < 257 ? 0 : ll_bases[i - 257],
     };
