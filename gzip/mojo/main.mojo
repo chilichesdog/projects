@@ -1,5 +1,5 @@
 from std import os
-from std.memory import Layout, Allocation
+from std.memory import Layout, Allocation, unsafe_memset_zero
 from std.sys import argv, size_of
 
 comptime FTEXT = 0b00001
@@ -54,8 +54,11 @@ def read_file(input: FileHandle) raises -> String8:
 
 
 def write_file(path: String, input: String8) raises:
+    var spn = Span[UInt8, MutUntrackedOrigin](
+        unsafe_ptr=input.str, length=Int(input.size)
+    )
     with FileHandle(path, "w") as stream:
-        stream.write(input.str)
+        stream.write_bytes(spn)
     # closes automatically
 
 
@@ -223,13 +226,13 @@ def build_huff_tree(mut nodes: Array[GenericHuffNode, _], node_count: UInt32):
 
     var code: UInt32 = 0
     bl_count[0] = 0
-    for bits in range(1, MAX_BITS):
+    for bits in range(1, MAX_BITS + 1):
         code = (code + bl_count[bits - 1]) << 1
         next_code[bits] = code
     for i in range(node_count):
         if nodes[i].len != 0:
-            next_code[nodes[i].len] += 1
             nodes[i].code = UInt16(next_code[nodes[i].len])
+            next_code[nodes[i].len] += 1
 
 
 @fieldwise_init
@@ -388,27 +391,27 @@ def _huff_impl(
     var max_ll_bits: UInt32 = 0
     var max_dist_bits: UInt32 = 0
 
-    for i in range(UInt32(285)):
+    for i in range(UInt32(286)):
         if UInt32(ll_nodes[i].len) > max_ll_bits:
             max_ll_bits = UInt32(ll_nodes[i].len)
 
-    for i in range(UInt32(29)):
-        if UInt32(ll_nodes[i].len) > max_ll_bits:
-            max_ll_bits = UInt32(ll_nodes[i].len)
+    for i in range(UInt32(30)):
+        if UInt32(dist_nodes[i].len) > max_dist_bits:
+            max_dist_bits = UInt32(dist_nodes[i].len)
 
-    var ll_lut_size: UInt32 = UInt32(size_of[LLLutNode]()) * (1 << max_ll_bits)
-    var dist_lut_size: UInt32 = UInt32(size_of[DistLutNode]()) * (
-        1 << max_dist_bits
-    )
+    var ll_lut_size: UInt32 = 1 << max_ll_bits
+    var dist_lut_size: UInt32 = 1 << max_dist_bits
 
     var ll_lut: Pointer[LLLutNode, MutUntrackedOrigin] = alloc(
         Layout[LLLutNode](count=Int(ll_lut_size))
     ).unsafe_leak()
+    unsafe_memset_zero(ll_lut, Int(ll_lut_size))
     var dist_lut: Pointer[DistLutNode, MutUntrackedOrigin] = alloc(
         Layout[DistLutNode](count=Int(dist_lut_size))
     ).unsafe_leak()
+    unsafe_memset_zero(dist_lut, Int(dist_lut_size))
 
-    for i in range(UInt32(285)):
+    for i in range(UInt32(286)):
         var len: UInt32 = UInt32(ll_nodes[i].len)
         var code: UInt32 = UInt32(ll_nodes[i].code)
 
@@ -427,7 +430,7 @@ def _huff_impl(
         var leftover_bits: UInt32 = max_ll_bits - len
         var leftover_max: UInt32 = (1 << leftover_bits) - 1
 
-        for leftover in range(leftover_max):
+        for leftover in range(leftover_max + 1):
             var index: UInt32 = UInt32(
                 reverse_bits(
                     UInt16((code << leftover_bits) | leftover),
@@ -437,7 +440,7 @@ def _huff_impl(
 
             ll_lut[unsafe_offset=index] = lut_node
 
-    for i in range(UInt32(29)):
+    for i in range(UInt32(30)):
         var len: UInt32 = UInt32(dist_nodes[i].len)
         var code: UInt32 = UInt32(dist_nodes[i].code)
 
@@ -455,7 +458,7 @@ def _huff_impl(
         var leftover_bits: UInt32 = max_dist_bits - len
         var leftover_max: UInt32 = (1 << leftover_bits) - 1
 
-        for leftover in range(leftover_max):
+        for leftover in range(leftover_max + 1):
             var index: UInt32 = UInt32(
                 reverse_bits(
                     UInt16((code << leftover_bits) | leftover),
@@ -472,8 +475,8 @@ def _huff_impl(
         var code: UInt32 = UInt32(ll_node.code)
 
         if code < 256:
-            pos += 1
             output[unsafe_offset=pos] = UInt8(code)
+            pos += 1
         elif code == 256:
             break
         else:
@@ -591,8 +594,8 @@ def _dyn_next_cl(
     var cl: UInt32 = UInt32(cl_node.code_len)
 
     if cl <= 15:
-        node_pos += 1
         nodes[node_pos].len = UInt16(cl)
+        node_pos += 1
         return UInt8(cl)
 
     var repeat_value: UInt32 = UInt32(prev_codelen) if cl == 16 else 0
@@ -601,8 +604,8 @@ def _dyn_next_cl(
     )
 
     while repeat_count:
-        node_pos += 1
         nodes[node_pos].len = UInt16(repeat_value)
+        node_pos += 1
         repeat_count -= 1
 
     return UInt8(repeat_value)
@@ -625,7 +628,7 @@ def _dynamic_block(
     build_huff_tree(cl_nodes, 19)
 
     var cl_lut = Array[ClLutNode, 256]()
-    for i in range(18):
+    for i in range(19):
         var len: UInt32 = UInt32(cl_nodes[i].len)
         var code: UInt32 = UInt32(cl_nodes[i].code)
 
@@ -640,7 +643,7 @@ def _dynamic_block(
 
         var leftover_bits: UInt32 = 7 - len
         var leftover_max: UInt32 = (1 << leftover_bits) - 1
-        for leftover in range(leftover_max):
+        for leftover in range(leftover_max + 1):
             var index: UInt32 = UInt32(
                 reverse_bits(
                     UInt16((code << leftover_bits) | leftover),
@@ -679,20 +682,20 @@ def _fixed_block(
     var ll_nodes = Array[GenericHuffNode, 288]()
     var dist_nodes = Array[GenericHuffNode, 32]()
 
-    for i in range(UInt32(143)):
+    for i in range(UInt32(144)):
         ll_nodes[i].len = 8
-    for i in range(UInt32(255)):
+    for i in range(UInt32(144), UInt32(256)):
         ll_nodes[i].len = 9
-    for i in range(UInt32(279)):
+    for i in range(UInt32(256), UInt32(280)):
         ll_nodes[i].len = 7
-    for i in range(UInt32(287)):
+    for i in range(UInt32(280), UInt32(288)):
         ll_nodes[i].len = 8
 
     for i in range(UInt32(32)):
         dist_nodes[i].len = 5
 
     build_huff_tree(ll_nodes, 288)
-    build_huff_tree(dist_nodes, 288)
+    build_huff_tree(dist_nodes, 32)
 
     return _huff_impl(bs, output, pos, ll_nodes, dist_nodes)
 
@@ -731,15 +734,12 @@ def inflate(input: String8, output: String8) raises:
             case 0b00:
                 # stored block
                 pos = _stored_block(bs, output.str, pos)
-                break
             case 0b01:
                 # fixed block
                 pos = _fixed_block(bs, output.str, pos)
-                break
             case 0b10:
                 # dynamic block
                 pos = _dynamic_block(bs, output.str, pos)
-                break
             case 0b11:
                 # reserved
-                break
+                raise "block_type 3: file is corrupt."
