@@ -1,6 +1,6 @@
 from std import os
 from std.memory import Layout, Allocation
-from std.sys import argv
+from std.sys import argv, size_of
 
 comptime FTEXT = 0b00001
 comptime FHCRC = 0b00010
@@ -151,8 +151,8 @@ def reverse_u16(n: UInt16) -> UInt16:
     return o
 
 
-def reverse_bits(n: UInt16, bits: UInt16):
-    _ = reverse_u16(n) >> (16 - bits)
+def reverse_bits(n: UInt16, bits: UInt16) -> UInt16:
+    return reverse_u16(n) >> (16 - bits)
 
 
 @fieldwise_init
@@ -205,7 +205,7 @@ def bs_take(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
 
 
 @fieldwise_init
-struct GenericHuffNode:
+struct GenericHuffNode(Defaultable):
     var len: UInt16
     var code: UInt16
 
@@ -213,14 +213,27 @@ struct GenericHuffNode:
 comptime MAX_BITS = 15
 
 
-def build_huff_tree(
-    nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin]
-):
-    ...
+def build_huff_tree(mut nodes: Array[GenericHuffNode, _], node_count: UInt32):
+    var bl_count = Array[UInt32, MAX_BITS + 1]()
+
+    for i in range(UInt32(node_count)):
+        bl_count[nodes[i].len] += 1
+
+    var next_code = Array[UInt32, MAX_BITS + 1]()
+
+    var code: UInt32 = 0
+    bl_count[0] = 0
+    for bits in range(1, MAX_BITS):
+        code = (code + bl_count[bits - 1]) << 1
+        next_code[bits] = code
+    for i in range(node_count):
+        if nodes[i].len != 0:
+            next_code[nodes[i].len] += 1
+            nodes[i].code = UInt16(next_code[nodes[i].len])
 
 
 @fieldwise_init
-struct LLLutNode:
+struct LLLutNode(ImplicitlyCopyable):
     var code: UInt16
     var bits_used: UInt8
     var extra_bits: UInt8
@@ -228,7 +241,7 @@ struct LLLutNode:
 
 
 @fieldwise_init
-struct DistLutNode:
+struct DistLutNode(ImplicitlyCopyable):
     var bits_used: UInt8
     var extra_bits: UInt8
     var dist_base: UInt16
@@ -366,12 +379,127 @@ comptime dist_bases: Array[UInt16, 30] = [
 
 
 def _huff_impl(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    ll_nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin],
-    dist_nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin],
-):
-    ...
+    mut pos: UInt64,
+    mut ll_nodes: Array[GenericHuffNode, 288],
+    mut dist_nodes: Array[GenericHuffNode, 32],
+) raises -> UInt64:
+    var max_ll_bits: UInt32 = 0
+    var max_dist_bits: UInt32 = 0
+
+    for i in range(UInt32(285)):
+        if UInt32(ll_nodes[i].len) > max_ll_bits:
+            max_ll_bits = UInt32(ll_nodes[i].len)
+
+    for i in range(UInt32(29)):
+        if UInt32(ll_nodes[i].len) > max_ll_bits:
+            max_ll_bits = UInt32(ll_nodes[i].len)
+
+    var ll_lut_size: UInt32 = UInt32(size_of[LLLutNode]()) * (1 << max_ll_bits)
+    var dist_lut_size: UInt32 = UInt32(size_of[DistLutNode]()) * (
+        1 << max_dist_bits
+    )
+
+    var ll_lut: Pointer[LLLutNode, MutUntrackedOrigin] = alloc(
+        Layout[LLLutNode](count=Int(ll_lut_size))
+    ).unsafe_leak()
+    var dist_lut: Pointer[DistLutNode, MutUntrackedOrigin] = alloc(
+        Layout[DistLutNode](count=Int(dist_lut_size))
+    ).unsafe_leak()
+
+    for i in range(UInt32(285)):
+        var len: UInt32 = UInt32(ll_nodes[i].len)
+        var code: UInt32 = UInt32(ll_nodes[i].code)
+
+        if len == 0:
+            continue
+
+        # ternary conditional: t if cond else f
+        # you can chain them: t0 if cond0 else f0 if cond2 else f1
+        var lut_node = LLLutNode(
+            code=UInt16(i),
+            bits_used=UInt8(len),
+            extra_bits=0 if i < 257 else materialize[ll_extras]()[i - 257],
+            length_base=0 if i < 257 else materialize[ll_bases]()[i - 257],
+        )
+
+        var leftover_bits: UInt32 = max_ll_bits - len
+        var leftover_max: UInt32 = (1 << leftover_bits) - 1
+
+        for leftover in range(leftover_max):
+            var index: UInt32 = UInt32(
+                reverse_bits(
+                    UInt16((code << leftover_bits) | leftover),
+                    UInt16(max_ll_bits),
+                )
+            )
+
+            ll_lut[unsafe_offset=index] = lut_node
+
+    for i in range(UInt32(29)):
+        var len: UInt32 = UInt32(dist_nodes[i].len)
+        var code: UInt32 = UInt32(dist_nodes[i].code)
+
+        if len == 0:
+            continue
+
+        # ternary conditional: t if cond else f
+        # you can chain them: t0 if cond0 else f0 if cond2 else f1
+        var lut_node = DistLutNode(
+            bits_used=UInt8(len),
+            extra_bits=UInt8(materialize[dist_extras]()[i]),
+            dist_base=materialize[dist_bases]()[i],
+        )
+
+        var leftover_bits: UInt32 = max_dist_bits - len
+        var leftover_max: UInt32 = (1 << leftover_bits) - 1
+
+        for leftover in range(leftover_max):
+            var index: UInt32 = UInt32(
+                reverse_bits(
+                    UInt16((code << leftover_bits) | leftover),
+                    UInt16(max_dist_bits),
+                )
+            )
+
+            dist_lut[unsafe_offset=index] = lut_node
+    while bs.bit_pos < bs.bit_size:
+        var ll_peek_bits: UInt32 = bs_peek(bs, UInt8(max_ll_bits))
+        var ll_node: LLLutNode = ll_lut[unsafe_offset=ll_peek_bits]
+        bs.bit_pos += UInt64(ll_node.bits_used)
+
+        var code: UInt32 = UInt32(ll_node.code)
+
+        if code < 256:
+            pos += 1
+            output[unsafe_offset=pos] = UInt8(code)
+        elif code == 256:
+            break
+        else:
+            var length: UInt32 = UInt32(ll_node.length_base) + bs_take(
+                bs, ll_node.extra_bits
+            )
+
+            var dist_peek_bits: UInt32 = bs_peek(bs, UInt8(max_dist_bits))
+            var dist_node: DistLutNode = dist_lut[unsafe_offset=dist_peek_bits]
+            bs.bit_pos += UInt64(dist_node.bits_used)
+
+            var dist: UInt32 = UInt32(dist_node.dist_base) + bs_take(
+                bs, dist_node.extra_bits
+            )
+
+            while length:
+                output[unsafe_offset=pos] = output[
+                    unsafe_offset=pos - UInt64(dist)
+                ]
+                pos += 1
+                length -= 1
+
+    ll_lut.unsafe_free()
+    dist_lut.unsafe_free()
+
+    return pos
 
 
 @fieldwise_init
@@ -468,11 +596,29 @@ def _dynamic_block(
 
 
 def _fixed_block(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    pos: UInt64,
-):
-    ...
+    mut pos: UInt64,
+) raises -> UInt64:
+    var ll_nodes = Array[GenericHuffNode, 288]()
+    var dist_nodes = Array[GenericHuffNode, 32]()
+
+    for i in range(UInt32(143)):
+        ll_nodes[i].len = 8
+    for i in range(UInt32(255)):
+        ll_nodes[i].len = 9
+    for i in range(UInt32(279)):
+        ll_nodes[i].len = 7
+    for i in range(UInt32(287)):
+        ll_nodes[i].len = 8
+
+    for i in range(UInt32(32)):
+        dist_nodes[i].len = 5
+
+    build_huff_tree(ll_nodes, 288)
+    build_huff_tree(dist_nodes, 288)
+
+    return _huff_impl(bs, output, pos, ll_nodes, dist_nodes)
 
 
 def _stored_block(
