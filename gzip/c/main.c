@@ -549,7 +549,7 @@ void inflate(string8 input, string8 out) {
     last_block = bs_take(&bs, 1);
     u32 block_type = bs_take(&bs, 2);
 
-    fprintf(stderr, "%u\n", block_type);
+    // fprintf(stderr, "%u\n", block_type);
 
     switch (block_type) {
     case 0b00:
