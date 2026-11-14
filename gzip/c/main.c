@@ -42,6 +42,8 @@ int main(int argc, char **argv) {
   string8 file_gz = read_file(path);
   string8 file = gunzip(file_gz);
   write_file(dest, file);
+  free(file_gz.str);
+  free(file.str);
 
   return 0;
 }

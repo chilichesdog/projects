@@ -28,6 +28,8 @@ def main() raises:
     var file_gz = read_file(handle)
     var file = gunzip(file_gz)
     write_file(dest, file)
+    file_gz.str.unsafe_free()
+    file.str.unsafe_free()
 
 
 def read_file(input: FileHandle) raises -> String8:
