@@ -42,6 +42,8 @@ int main(int argc, char **argv) {
   string8 file_gz = read_file(path);
   string8 file = gunzip(file_gz);
   write_file(dest, file);
+  free(file_gz.str);
+  free(file.str);
 
   return 0;
 }
@@ -320,6 +322,8 @@ u64 _huff_impl(bitstream *bs, u8 *out, u64 pos, generic_huff_node *ll_nodes,
     ll_lut_node lut_node = {
         .code = i,
         .bits_used = len,
+        // ternary operator: cond ? t : f
+        // just an if/else that produces a value
         .extra_bits = i < 257 ? 0 : ll_extras[i - 257],
         .length_base = i < 257 ? 0 : ll_bases[i - 257],
     };
@@ -535,6 +539,7 @@ u64 _stored_block(bitstream *bs, u8 *out, u64 pos) {
 }
 
 void inflate(string8 input, string8 out) {
+  // Why is there a pos in the switch/case block?
   bitstream bs = bs_init(input);
 
   u64 pos = 0;
@@ -544,7 +549,7 @@ void inflate(string8 input, string8 out) {
     last_block = bs_take(&bs, 1);
     u32 block_type = bs_take(&bs, 2);
 
-    fprintf(stderr, "%u\n", block_type);
+    // fprintf(stderr, "%u\n", block_type);
 
     switch (block_type) {
     case 0b00:

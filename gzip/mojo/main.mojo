@@ -1,6 +1,6 @@
 from std import os
-from std.memory import Layout, Allocation
-from std.sys import argv
+from std.memory import Layout, Allocation, unsafe_memset_zero
+from std.sys import argv, size_of
 
 comptime FTEXT = 0b00001
 comptime FHCRC = 0b00010
@@ -10,39 +10,44 @@ comptime FCOMMENT = 0b10000
 
 
 @fieldwise_init
-struct String8:
-    var str: Pointer[mut=False, UInt8, ImmUntrackedOrigin]
+struct String8(ImplicitlyCopyable):
+    var str: Pointer[mut=True, UInt8, MutUntrackedOrigin]
     # var str: Pointer[mut=True,UInt8,origin=MutUnsafeAnyOrigin]
     var size: UInt64
 
 
 def main() raises:
     var args: Span[StringSpan[ImmStaticOrigin], ImmStaticOrigin] = argv()
-    # var path: StringSpan[ImmStaticOrigin] = args[1]
-    # var dest: StringSpan[ImmStaticOrigin] = args[2]
-    var path = Pointer(to=args[1])
-    var dest = Pointer(to=args[2])
-    var handle = FileHandle(path[unsafe_offset=0], "r")
+    if len(args) != 3:
+        raise "Args must be: input output"
+    var path: StringSpan[ImmStaticOrigin] = args[1]
+    var dest: StringSpan[ImmStaticOrigin] = args[2]
+    # var path = Pointer(to=args[1])
+    # var dest = Pointer(to=args[2])
+    var handle = FileHandle(path, "r")
     var file_gz = read_file(handle)
-
-    print(file_gz.size)
+    var file = gunzip(file_gz)
+    write_file(dest, file)
+    file_gz.str.unsafe_free()
+    file.str.unsafe_free()
 
 
 def read_file(input: FileHandle) raises -> String8:
-    "Read the bytes of a `.gz` file."
+    """Reads the bytes of a `.gz` file."""
     var size: UInt64 = input.seek(0, os.SEEK_END)
 
     _ = input.seek(0, os.SEEK_SET)
 
     # tried using .unsafe_ptr() but that leaves Allocation as the owner.
-    # use .unsafe_leak() bc it consumes the Allocation without freeing the memory
-    # but you have to manually free the memory later
+    # use .unsafe_leak() bc it consumes the Allocation without freeing the
+    # memory but you have to manually free the memory later
     var str: Pointer[UInt8, MutUntrackedOrigin] = alloc(
         Layout[UInt8](count=Int(size))
     ).unsafe_leak()
     var spn = Span[UInt8, MutUntrackedOrigin](unsafe_ptr=str, length=Int(size))
 
-    # input.read() writes into the Pointer that the Span references so there is no need to explicitly write into str
+    # input.read() writes into the Pointer that the Span references so there is
+    # no need to explicitly write into str
     var length: Int = input.read(spn)
     if length != Int(size):
         raise Error("file size does not match read bytes")
@@ -50,17 +55,67 @@ def read_file(input: FileHandle) raises -> String8:
         return String8(str=str, size=size)
 
 
-def write_file(path: String, input: String8):
-    ...
+def write_file(path: String, input: String8) raises:
+    var spn = Span[UInt8, MutUntrackedOrigin](
+        unsafe_ptr=input.str, length=Int(input.size)
+    )
+    with FileHandle(path, "w") as stream:
+        stream.write_bytes(spn)
+    # closes automatically
 
 
+@always_inline
 def read_little_end(
     buffer: String8, byte_offset: UInt64, nbytes: UInt32
-) -> UInt32:
-    return 0
+) raises -> UInt32:
+    """Reads up to 4 little-endian bytes as a `UInt32`.
+
+    If `nbytes` would force a read past the end of the buffer, it reads only
+    the bytes that are left.
+
+    Args:
+        buffer: A `String8` with buffer and size.
+        byte_offset: Offset to start from in the buffer.
+        nbytes: Number of bytes <= 4 to read.
+
+    Returns:
+        The value as a `UInt32`.
+
+    Raises:
+        Error: If `nbytes` is over 4 or `byte_offset` is past the end of the
+            buffer.
+    """
+
+    var n: UInt32 = nbytes
+    if n > 4:
+        raise "read_little_end: nbytes cannot be higher than 4"
+    elif byte_offset >= buffer.size:
+        raise "read_little_end: offset is past the end of the buffer"
+    elif byte_offset + UInt64(n) > buffer.size:
+        n = UInt32(buffer.size - byte_offset)
+
+    var output: UInt32 = 0
+    for i in range(n):
+        var byte = buffer.str[unsafe_offset=byte_offset + UInt64(i)]
+        var shifted = UInt32(byte) << (8 * i)
+
+        output |= shifted
+
+    return output
 
 
-def gunzip(input: String8):
+def skip_null_term(input: String8, block_offset: UInt32) -> UInt32:
+    """Returns the offset after the terminator."""
+    var offset: UInt32 = block_offset
+    while True:
+        var byte = input.str[unsafe_offset=offset]
+        offset += 1
+        if byte == 0:
+            break
+    return offset
+
+
+def gunzip(input: String8) raises -> String8:
     # this is how mojo looks at the pointee value
     # don't confuse with ptr.unsafe_offset(x) which returns a pointer offset by x
     var flags: UInt8 = input.str[unsafe_offset=3]
@@ -68,25 +123,29 @@ def gunzip(input: String8):
 
     # going past the headers
     if (flags & FEXTRA) != 0:
-        var xlen_ptr = input.str.unsafe_offset(10)
-        var xlen_u16_ptr = xlen_ptr.unsafe_bitcast[Scalar[DType.uint16]]()
-        var xlen = xlen_u16_ptr.unsafe_load[alignment=1]()
-
+        var xlen = UInt16(read_little_end(input, 10, 2))
         block_offset += 2 + UInt32(xlen)
     if (flags & FNAME) != 0:
-        while input.str[unsafe_offset=block_offset]:
-            block_offset += 1
+        block_offset = skip_null_term(input, block_offset)
     if (flags & FCOMMENT) != 0:
-        while input.str[unsafe_offset=block_offset]:
-            block_offset += 1
+        block_offset = skip_null_term(input, block_offset)
     if (flags & FHCRC) != 0:
         block_offset += 2
 
-    var isize_ptr = input.str.unsafe_offset(Int(input.size) - 4)
-    var isize_u16_ptr = isize_ptr.unsafe_bitcast[Scalar[DType.uint32]]()
-    var isize = isize_u16_ptr.unsafe_load[alignment=1]()
+    var isize: UInt32 = read_little_end(input, input.size - 4, 4)
 
-    print(isize)
+    var output = String8(
+        size=UInt64(isize),
+        str=alloc(Layout[UInt8](count=Int(isize))).unsafe_leak(),
+    )
+
+    var deflate_block = String8(
+        size=input.size - UInt64(block_offset) - 8,
+        str=input.str.unsafe_offset(block_offset),
+    )
+    inflate(deflate_block, output)
+
+    return output
 
 
 def reverse_u16(n: UInt16) -> UInt16:
@@ -98,52 +157,42 @@ def reverse_u16(n: UInt16) -> UInt16:
     return o
 
 
-def reverse_bits(n: UInt16, bits: UInt16):
-    _ = reverse_u16(n) >> (16 - bits)
+def reverse_bits(n: UInt16, bits: UInt16) -> UInt16:
+    return reverse_u16(n) >> (16 - bits)
 
 
 @fieldwise_init
-struct Bitstream:
+struct Bitstream(ImplicitlyCopyable):
     var backing: String8
     var bit_pos: UInt64
     var bit_size: UInt64
 
 
-def bs_init(backing: String8):
-    ...
+def bs_init(backing: String8) -> Bitstream:
+    return Bitstream(backing=backing, bit_pos=0, bit_size=backing.size * 8)
 
 
-comptime bit_masks: Array[UInt32, 17] = [
-    0b0000000000000000,
-    0b0000000000000001,
-    0b0000000000000011,
-    0b0000000000000111,
-    0b0000000000001111,
-    0b0000000000011111,
-    0b0000000000111111,
-    0b0000000001111111,
-    0b0000000011111111,
-    0b0000000111111111,
-    0b0000001111111111,
-    0b0000011111111111,
-    0b0000111111111111,
-    0b0001111111111111,
-    0b0011111111111111,
-    0b0111111111111111,
-    0b1111111111111111,
-]
+@always_inline
+def bs_peek(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
+    """Returns the next `nbits` bits without advancing."""
+    var byte_pos: UInt64 = bs.bit_pos / 8
+    var bits: UInt32 = read_little_end(bs.backing, byte_pos, 4)
+    bits >>= UInt32(bs.bit_pos) % 8
+
+    return bits & ((1 << UInt32(nbits)) - 1)
 
 
-def bs_peek(bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin], nbits: UInt8):
-    ...
+@always_inline
+def bs_take(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
+    """Advances bit position by `nbits`."""
+    var bits: UInt32 = bs_peek(bs, nbits)
+    bs.bit_pos += UInt64(nbits)
 
-
-def bs_take(bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin], nbits: UInt8):
-    ...
+    return bits & ((1 << UInt32(nbits)) - 1)
 
 
 @fieldwise_init
-struct GenericHuffNode:
+struct GenericHuffNode(Defaultable):
     var len: UInt16
     var code: UInt16
 
@@ -151,14 +200,27 @@ struct GenericHuffNode:
 comptime MAX_BITS = 15
 
 
-def build_huff_tree(
-    nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin]
-):
-    ...
+def build_huff_tree(mut nodes: Array[GenericHuffNode, _], node_count: UInt32):
+    var bl_count = Array[UInt32, MAX_BITS + 1]()
+
+    for i in range(UInt32(node_count)):
+        bl_count[nodes[i].len] += 1
+
+    var next_code = Array[UInt32, MAX_BITS + 1]()
+
+    var code: UInt32 = 0
+    bl_count[0] = 0
+    for bits in range(1, MAX_BITS + 1):
+        code = (code + bl_count[bits - 1]) << 1
+        next_code[bits] = code
+    for i in range(node_count):
+        if nodes[i].len != 0:
+            nodes[i].code = UInt16(next_code[nodes[i].len])
+            next_code[nodes[i].len] += 1
 
 
 @fieldwise_init
-struct LLLutNode:
+struct LLLutNode(ImplicitlyCopyable):
     var code: UInt16
     var bits_used: UInt8
     var extra_bits: UInt8
@@ -166,7 +228,7 @@ struct LLLutNode:
 
 
 @fieldwise_init
-struct DistLutNode:
+struct DistLutNode(ImplicitlyCopyable):
     var bits_used: UInt8
     var extra_bits: UInt8
     var dist_base: UInt16
@@ -304,16 +366,131 @@ comptime dist_bases: Array[UInt16, 30] = [
 
 
 def _huff_impl(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    ll_nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin],
-    dist_nodes: Pointer[mut=True, GenericHuffNode, MutUntrackedOrigin],
-):
-    ...
+    mut pos: UInt64,
+    mut ll_nodes: Array[GenericHuffNode, _],
+    mut dist_nodes: Array[GenericHuffNode, _],
+) raises -> UInt64:
+    var max_ll_bits: UInt32 = 0
+    var max_dist_bits: UInt32 = 0
+
+    for i in range(UInt32(286)):
+        if UInt32(ll_nodes[i].len) > max_ll_bits:
+            max_ll_bits = UInt32(ll_nodes[i].len)
+
+    for i in range(UInt32(30)):
+        if UInt32(dist_nodes[i].len) > max_dist_bits:
+            max_dist_bits = UInt32(dist_nodes[i].len)
+
+    var ll_lut_size: UInt32 = 1 << max_ll_bits
+    var dist_lut_size: UInt32 = 1 << max_dist_bits
+
+    var ll_lut: Pointer[LLLutNode, MutUntrackedOrigin] = alloc(
+        Layout[LLLutNode](count=Int(ll_lut_size))
+    ).unsafe_leak()
+    unsafe_memset_zero(ll_lut, Int(ll_lut_size))
+    var dist_lut: Pointer[DistLutNode, MutUntrackedOrigin] = alloc(
+        Layout[DistLutNode](count=Int(dist_lut_size))
+    ).unsafe_leak()
+    unsafe_memset_zero(dist_lut, Int(dist_lut_size))
+
+    for i in range(UInt32(286)):
+        var len: UInt32 = UInt32(ll_nodes[i].len)
+        var code: UInt32 = UInt32(ll_nodes[i].code)
+
+        if len == 0:
+            continue
+
+        # ternary conditional: t if cond else f
+        # you can chain them: t0 if cond0 else f0 if cond2 else f1
+        var lut_node = LLLutNode(
+            code=UInt16(i),
+            bits_used=UInt8(len),
+            extra_bits=0 if i < 257 else materialize[ll_extras]()[i - 257],
+            length_base=0 if i < 257 else materialize[ll_bases]()[i - 257],
+        )
+
+        var leftover_bits: UInt32 = max_ll_bits - len
+        var leftover_max: UInt32 = (1 << leftover_bits) - 1
+
+        for leftover in range(leftover_max + 1):
+            var index: UInt32 = UInt32(
+                reverse_bits(
+                    UInt16((code << leftover_bits) | leftover),
+                    UInt16(max_ll_bits),
+                )
+            )
+
+            ll_lut[unsafe_offset=index] = lut_node
+
+    for i in range(UInt32(30)):
+        var len: UInt32 = UInt32(dist_nodes[i].len)
+        var code: UInt32 = UInt32(dist_nodes[i].code)
+
+        if len == 0:
+            continue
+
+        # ternary conditional: t if cond else f
+        # you can chain them: t0 if cond0 else f0 if cond2 else f1
+        var lut_node = DistLutNode(
+            bits_used=UInt8(len),
+            extra_bits=UInt8(materialize[dist_extras]()[i]),
+            dist_base=materialize[dist_bases]()[i],
+        )
+
+        var leftover_bits: UInt32 = max_dist_bits - len
+        var leftover_max: UInt32 = (1 << leftover_bits) - 1
+
+        for leftover in range(leftover_max + 1):
+            var index: UInt32 = UInt32(
+                reverse_bits(
+                    UInt16((code << leftover_bits) | leftover),
+                    UInt16(max_dist_bits),
+                )
+            )
+
+            dist_lut[unsafe_offset=index] = lut_node
+    while bs.bit_pos < bs.bit_size:
+        var ll_peek_bits: UInt32 = bs_peek(bs, UInt8(max_ll_bits))
+        var ll_node: LLLutNode = ll_lut[unsafe_offset=ll_peek_bits]
+        bs.bit_pos += UInt64(ll_node.bits_used)
+
+        var code: UInt32 = UInt32(ll_node.code)
+
+        if code < 256:
+            output[unsafe_offset=pos] = UInt8(code)
+            pos += 1
+        elif code == 256:
+            break
+        else:
+            var length: UInt32 = UInt32(ll_node.length_base) + bs_take(
+                bs, ll_node.extra_bits
+            )
+
+            var dist_peek_bits: UInt32 = bs_peek(bs, UInt8(max_dist_bits))
+            var dist_node: DistLutNode = dist_lut[unsafe_offset=dist_peek_bits]
+            bs.bit_pos += UInt64(dist_node.bits_used)
+
+            var dist: UInt32 = UInt32(dist_node.dist_base) + bs_take(
+                bs, dist_node.extra_bits
+            )
+
+            while length:
+                output[unsafe_offset=pos] = output[
+                    unsafe_offset=pos - UInt64(dist)
+                ]
+                pos += 1
+                length -= 1
+
+    ll_lut.unsafe_free()
+    dist_lut.unsafe_free()
+
+    return pos
 
 
 @fieldwise_init
-struct ClLutNode:
+struct ClLutNode(Defaultable, ImplicitlyCopyable):
     var code_len: UInt8
     var bits_used: UInt8
     var extra_bits: UInt8
@@ -388,38 +565,165 @@ comptime cl_order: Array[UInt8, 19] = [
 
 
 def _dyn_next_cl(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
-    nodes: GenericHuffNode,
-    node_pos: Pointer[mut=True, UInt32, MutUntrackedOrigin],
-    cl_lut: ClLutNode,
+    mut bs: Bitstream,
+    mut nodes: Array[GenericHuffNode, _],
+    mut node_pos: UInt32,
+    cl_lut: Array[ClLutNode, 256],
     prev_codelen: UInt8,
-):
-    ...
+) raises -> UInt8:
+    var peek_bits: UInt32 = bs_peek(bs, 7)
+    var cl_node: ClLutNode = cl_lut[peek_bits]
+    bs.bit_pos += UInt64(cl_node.bits_used)
+
+    var cl: UInt32 = UInt32(cl_node.code_len)
+
+    if cl <= 15:
+        nodes[node_pos].len = UInt16(cl)
+        node_pos += 1
+        return UInt8(cl)
+
+    var repeat_value: UInt32 = UInt32(prev_codelen) if cl == 16 else 0
+    var repeat_count: UInt32 = UInt32(cl_node.repeat_base) + bs_take(
+        bs, cl_node.extra_bits
+    )
+
+    while repeat_count:
+        nodes[node_pos].len = UInt16(repeat_value)
+        node_pos += 1
+        repeat_count -= 1
+
+    return UInt8(repeat_value)
 
 
 def _dynamic_block(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    pos: UInt64,
-):
-    ...
+    mut pos: UInt64,
+) raises -> UInt64:
+    var num_ll_codes: UInt32 = bs_take(bs, 5) + 257
+    var num_dist_codes: UInt32 = bs_take(bs, 5) + 1
+    var num_cl_codes: UInt32 = bs_take(bs, 4) + 4
+
+    var cl_nodes = Array[GenericHuffNode, 19]()
+
+    for i in range(num_cl_codes):
+        cl_nodes[materialize[cl_order]()[i]].len = UInt16(bs_take(bs, 3))
+
+    build_huff_tree(cl_nodes, 19)
+
+    var cl_lut = Array[ClLutNode, 256]()
+    for i in range(19):
+        var len: UInt32 = UInt32(cl_nodes[i].len)
+        var code: UInt32 = UInt32(cl_nodes[i].code)
+
+        if len == 0:
+            continue
+        var lut_node = ClLutNode(
+            code_len=UInt8(i),
+            bits_used=UInt8(len),
+            extra_bits=materialize[cl_extras]()[i],
+            repeat_base=materialize[cl_bases]()[i],
+        )
+
+        var leftover_bits: UInt32 = 7 - len
+        var leftover_max: UInt32 = (1 << leftover_bits) - 1
+        for leftover in range(leftover_max + 1):
+            var index: UInt32 = UInt32(
+                reverse_bits(
+                    UInt16((code << leftover_bits) | leftover),
+                    7,
+                )
+            )
+            cl_lut[index] = lut_node
+
+    var ll_nodes = Array[GenericHuffNode, 286]()
+    var dist_nodes = Array[GenericHuffNode, 30]()
+
+    var prev_codelen: UInt8 = 0
+    var node_pos: UInt32 = 0
+    while node_pos < num_ll_codes:
+        prev_codelen = _dyn_next_cl(
+            bs, ll_nodes, node_pos, cl_lut, prev_codelen
+        )
+
+    node_pos: UInt32 = 0
+    while node_pos < num_dist_codes:
+        prev_codelen = _dyn_next_cl(
+            bs, dist_nodes, node_pos, cl_lut, prev_codelen
+        )
+
+    build_huff_tree(ll_nodes, 286)
+    build_huff_tree(dist_nodes, 30)
+
+    return _huff_impl(bs, output, pos, ll_nodes, dist_nodes)
 
 
 def _fixed_block(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    pos: UInt64,
-):
-    ...
+    mut pos: UInt64,
+) raises -> UInt64:
+    var ll_nodes = Array[GenericHuffNode, 288]()
+    var dist_nodes = Array[GenericHuffNode, 32]()
+
+    for i in range(UInt32(144)):
+        ll_nodes[i].len = 8
+    for i in range(UInt32(144), UInt32(256)):
+        ll_nodes[i].len = 9
+    for i in range(UInt32(256), UInt32(280)):
+        ll_nodes[i].len = 7
+    for i in range(UInt32(280), UInt32(288)):
+        ll_nodes[i].len = 8
+
+    for i in range(UInt32(32)):
+        dist_nodes[i].len = 5
+
+    build_huff_tree(ll_nodes, 288)
+    build_huff_tree(dist_nodes, 32)
+
+    return _huff_impl(bs, output, pos, ll_nodes, dist_nodes)
 
 
 def _stored_block(
-    bs: Pointer[mut=True, Bitstream, MutUntrackedOrigin],
+    mut bs: Bitstream,
     output: Pointer[mut=True, UInt8, MutUntrackedOrigin],
-    pos: UInt64,
-):
-    ...
+    mut pos: UInt64,
+) raises -> UInt64:
+    if bs.bit_pos % 8 != 0:
+        bs.bit_pos += 8 - bs.bit_pos % 8
+
+    var LEN: UInt16 = UInt16(bs_take(bs, 16))
+    var NLEN: UInt16 = UInt16(bs_take(bs, 16))
+    if LEN != ~NLEN:
+        raise "Error: not aligned to the byte. Check _stored_block"
+
+    for _ in range(LEN):
+        output[unsafe_offset=pos] = bs.backing.str[unsafe_offset=bs.bit_pos / 8]
+        bs.bit_pos += 8
+        pos += 1
+
+    return pos
 
 
-def inflate(input: String8, output: String8):
-    ...
+def inflate(input: String8, output: String8) raises:
+    var bs: Bitstream = bs_init(input)
+    var pos: UInt64 = 0
+
+    var last_block: Bool = False
+    while not last_block:
+        last_block = Bool(bs_take(bs, 1))
+        var block_type: UInt32 = bs_take(bs, 2)
+
+        match block_type:
+            case 0b00:
+                # stored block
+                pos = _stored_block(bs, output.str, pos)
+            case 0b01:
+                # fixed block
+                pos = _fixed_block(bs, output.str, pos)
+            case 0b10:
+                # dynamic block
+                pos = _dynamic_block(bs, output.str, pos)
+            case 0b11:
+                # reserved
+                raise "block_type 3: file is corrupt."
