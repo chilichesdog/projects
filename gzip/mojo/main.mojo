@@ -64,6 +64,7 @@ def write_file(path: String, input: String8) raises:
     # closes automatically
 
 
+@always_inline
 def read_little_end(
     buffer: String8, byte_offset: UInt64, nbytes: UInt32
 ) raises -> UInt32:
@@ -171,42 +172,23 @@ def bs_init(backing: String8) -> Bitstream:
     return Bitstream(backing=backing, bit_pos=0, bit_size=backing.size * 8)
 
 
-comptime bit_masks: Array[UInt32, 17] = [
-    0b0000000000000000,
-    0b0000000000000001,
-    0b0000000000000011,
-    0b0000000000000111,
-    0b0000000000001111,
-    0b0000000000011111,
-    0b0000000000111111,
-    0b0000000001111111,
-    0b0000000011111111,
-    0b0000000111111111,
-    0b0000001111111111,
-    0b0000011111111111,
-    0b0000111111111111,
-    0b0001111111111111,
-    0b0011111111111111,
-    0b0111111111111111,
-    0b1111111111111111,
-]
-
-
+@always_inline
 def bs_peek(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
     """Returns the next `nbits` bits without advancing."""
     var byte_pos: UInt64 = bs.bit_pos / 8
     var bits: UInt32 = read_little_end(bs.backing, byte_pos, 4)
     bits >>= UInt32(bs.bit_pos) % 8
 
-    return bits & materialize[bit_masks]()[nbits]
+    return bits & ((1 << UInt32(nbits)) - 1)
 
 
+@always_inline
 def bs_take(mut bs: Bitstream, nbits: UInt8) raises -> UInt32:
     """Advances bit position by `nbits`."""
     var bits: UInt32 = bs_peek(bs, nbits)
     bs.bit_pos += UInt64(nbits)
 
-    return bits & materialize[bit_masks]()[nbits]
+    return bits & ((1 << UInt32(nbits)) - 1)
 
 
 @fieldwise_init
