@@ -33,7 +33,7 @@ comptime FNT_MEM_ADR = 0x050
 #     VF is also used as a flag register; many instructions will set it to either 1 or 0 based on some rule, for example using it as a carry flag
 
 
-struct Core:
+struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
     """
     The CHIP-8 virtual machine. Only what is defined in the spec belongs here.
     """
@@ -64,6 +64,15 @@ struct Core:
         var font = materialize[FONT]()
         for ind, f in enumerate(font):
             self.memory[FNT_MEM_ADR + ind] = f
+
+
+@fieldwise_init
+struct CHIP8Model(Equatable):
+    var _value: Int
+    comptime STANDARD = CHIP8Model(0)
+    comptime SUPER = CHIP8Model(1)
+    comptime XO = CHIP8Model(2)
+    comptime MEGA = CHIP8Model(3)
 
 
 trait Frontable:
