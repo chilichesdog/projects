@@ -1,4 +1,7 @@
 from std.memory import Layout
+from std.time import sleep
+from std.sys import argv
+from std.os import *
 
 comptime FONT: Array[UInt8, 80] = [
     # fmt: off
@@ -80,16 +83,19 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         for ind, byte in enumerate(bytes):
             self.memory[PRGM_MEM_START + ind] = byte
 
+    @always_inline
     def tick_timers(mut self):
         if self.timer_delay != 0:
             self.timer_delay -= 1
         if self.timer_sound != 0:
             self.timer_sound -= 1
 
+    @always_inline
     def step(mut self):
         var code = self.fetch()
         self.execute(code)
 
+    @always_inline
     def fetch(mut self) -> UInt16:
         var code = UInt16(self.memory[self.pc]) << 8 | UInt16(
             self.memory[self.pc + 1]
@@ -256,7 +262,42 @@ trait Frontable:
 
 
 struct Emulator[T: Frontable]:
-    ...
+    var CHIP8: Core[]
+    var rom: List[UInt8]
+    var args: Span[StringSpan[ImmStaticOrigin], ImmStaticOrigin]
+
+    def __init__(out self) raises:
+        self.CHIP8 = Core[]()
+        self.args = argv()
+        self.rom = List[UInt8]()
+        self.get_rom()
+        self.CHIP8.load_rom(self.rom)
+
+    def get_rom(mut self) raises:
+        var path = self.args[1]
+        var file = FileHandle(path, "rb")
+        var size = file.seek(0, SEEK_END)
+        _ = file.seek(0, SEEK_SET)
+        var bytes = List[UInt8]()
+        var buffer = Span[](bytes)
+        _ = file.read(buffer)
+
+        self.rom = bytes^
+
+    def present(mut self) raises:
+        var screen = String()
+        while True:
+            self.CHIP8.step()
+
+            for y in range(64):
+                for x in range(32):
+                    if self.CHIP8.display[y][x]:
+                        screen += "██"
+                    else:
+                        screen += "  "
+                screen += "\n"
+            print(screen, end="")
+            sleep(1.0 / 60.0)
 
 
 struct Frontend(Frontable):
