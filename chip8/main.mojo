@@ -287,20 +287,18 @@ struct CHIP8Model(Equatable):
     comptime MEGA = CHIP8Model(3)
 
 
-trait Frontable:
-    ...
-
-
 comptime FRAME_TIME: Int = Int(Float64(1.0 / 60.0) * 1e9)
 
 
-struct Emulator[]:
+struct Emulator[F: Frontable]:
     var CHIP8: Core[]
     var rom: List[UInt8]
     var args: Span[StringSpan[ImmStaticOrigin], ImmStaticOrigin]
+    var frontend: Self.F
 
     def __init__(out self) raises:
         self.CHIP8 = Core[]()
+        self.frontend = Self.F()
         self.args = argv()
         self.rom = List[UInt8]()
         self.get_rom()
@@ -310,14 +308,11 @@ struct Emulator[]:
     def get_rom(mut self) raises:
         var path = self.args[1]
         var file = open(path, "r")
-        var size = file.seek(0, SEEK_END)
-        _ = file.seek(0, SEEK_SET)
-        var bytes = file.read_bytes(Int(size))
+        var bytes = file.read_bytes()
 
         # print(t"Path: {path}\nSize:{size}\nContents: {bytes}")
         self.rom = bytes^
 
-    @always_inline
     def run(mut self) raises:
         var frame_start: Int
         var frame_end: Int
@@ -328,34 +323,41 @@ struct Emulator[]:
             for _ in range(12):
                 self.CHIP8.step()
             self.CHIP8.tick_timers()
-            self.draw()
+            self.frontend.draw(self.CHIP8)
             frame_end = perf_counter_ns()
             frame_dur = frame_end - frame_start
             if frame_dur < FRAME_TIME:
-                sleep(FRAME_TIME - frame_dur)
-            elif frame_dur >= FRAME_TIME:
-                pass
+                sleep((FRAME_TIME - frame_dur) / 1e9)
 
-    def draw(mut self) raises:
-        var screen: String
+
+trait Frontable(Defaultable, Deinitable, Movable):
+    def draw(mut self, CHIP8: Core) raises:
+        ...
+
+    def clear_screen(self):
+        ...
+
+
+@fieldwise_init
+struct TermFrontend(Frontable):
+    def clear_screen(self):
         print("\x1b[2J")
-        while True:
-            screen = "\x1b[H"
 
-            for y in range(32):
-                for x in range(64):
-                    if self.CHIP8.display[y][x]:
-                        screen += "██"
-                    else:
-                        screen += "  "
-                screen += "\n"
-            print(screen, end="", flush=True)
+    @always_inline
+    def draw(mut self, CHIP8: Core) raises:
+        var screen: String
+        screen = "\x1b[H"
 
-
-struct Frontend(Frontable):
-    ...
+        for y in range(32):
+            for x in range(64):
+                if CHIP8.display[y][x]:
+                    screen += "██"
+                else:
+                    screen += "  "
+            screen += "\n"
+        print(screen, end="", flush=True)
 
 
 def main() raises:
-    var emu = Emulator()
+    var emu = Emulator[TermFrontend[]]()
     emu.run()
