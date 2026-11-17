@@ -1,3 +1,5 @@
+from std.memory import Layout
+
 comptime FONT: Array[UInt8, 80] = [
     # fmt: off
     0xF0, 0x90, 0x90, 0x90, 0xF0, # 0
@@ -43,6 +45,8 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
     var i: UInt16
     var pc: UInt16
     var stack: Array[UInt16, 16]
+    # pointer is a misnomer here; it's just an index
+    var stack_ptr: Int
     var timer_delay: UInt8
     var timer_sound: UInt8
     var v: Array[UInt8, 16]
@@ -54,6 +58,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         self.i = 0
         self.pc = UInt16(0x200)
         self.stack = Array[UInt16, 16]()
+        self.stack_ptr = 0
         self.timer_delay = 0
         self.timer_sound = 0
         self.v = Array[UInt8, 16]()
