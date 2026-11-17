@@ -74,6 +74,12 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         for ind, byte in enumerate(bytes):
             self.memory[self.pc + UInt16(ind)] = UInt8(byte)
 
+    def tick_timers(mut self):
+        if self.timer_delay != 0:
+            self.timer_delay -= 1
+        if self.timer_sound != 0:
+            self.timer_sound -= 1
+
 
 @fieldwise_init
 struct CHIP8Model(Equatable):
