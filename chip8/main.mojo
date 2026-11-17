@@ -261,7 +261,7 @@ trait Frontable:
     ...
 
 
-struct Emulator[T: Frontable]:
+struct Emulator[]:
     var CHIP8: Core[]
     var rom: List[UInt8]
     var args: Span[StringSpan[ImmStaticOrigin], ImmStaticOrigin]
@@ -275,28 +275,40 @@ struct Emulator[T: Frontable]:
 
     def get_rom(mut self) raises:
         var path = self.args[1]
-        var file = FileHandle(path, "rb")
+        var file = FileHandle(path, "r")
         var size = file.seek(0, SEEK_END)
         _ = file.seek(0, SEEK_SET)
-        var bytes = List[UInt8]()
-        var buffer = Span[](bytes)
+
+        var ptr: Pointer[UInt8, MutUntrackedOrigin] = alloc(
+            Layout[UInt8](count=Int(size))
+        ).unsafe_leak()
+        var buffer = Span[UInt8, MutUntrackedOrigin](
+            unsafe_ptr=ptr, length=Int(size)
+        )
         _ = file.read(buffer)
 
+        var bytes = List[UInt8]()
+        for i in range(size):
+            bytes.append(ptr[unsafe_offset=i])
+
+        print(t"Path: {path}\nSize:{size}\nContents: {bytes}")
         self.rom = bytes^
 
     def present(mut self) raises:
-        var screen = String()
+        var screen: String
+        print("\x1b[2J")
         while True:
             self.CHIP8.step()
+            screen = "\x1b[H"
 
-            for y in range(64):
-                for x in range(32):
+            for y in range(32):
+                for x in range(64):
                     if self.CHIP8.display[y][x]:
                         screen += "██"
                     else:
                         screen += "  "
                 screen += "\n"
-            print(screen, end="")
+            print(screen, end="", flush=True)
             sleep(1.0 / 60.0)
 
 
@@ -304,5 +316,6 @@ struct Frontend(Frontable):
     ...
 
 
-def main():
-    pass
+def main() raises:
+    var emu = Emulator()
+    emu.present()
