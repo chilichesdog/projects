@@ -112,7 +112,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         var kk = code & 0xFF
         var n = code & 0xF
         var nnn = code & 0xFFF
-        # the FX__ group (except FX0A). Check them with Timendus's test suite: 3-corax+.ch8 checks most instructions and shows a pass/fail mark next to each. 4-flags.ch8 checks VF behavior in the arithmetic instructions, including the case where X is F.
+        # Check them with Timendus's test suite: 3-corax+.ch8 checks most instructions and shows a pass/fail mark next to each. 4-flags.ch8 checks VF behavior in the arithmetic instructions, including the case where X is F.
         match first:
             case 0x0:
                 match kk:
@@ -120,6 +120,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         # 00E0: Clear the display.
                         self.display = Array[Array[Bool, 64], 32]()
                     case 0xEE:
+                        # X
                         # 00EE: Return from a subroutine.
                         self.pc = self.stack[self.stack_ptr]
                         self.stack_ptr -= 1
@@ -127,67 +128,87 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         # 0NNN
                         pass
             case 0x1:
+                # O
                 # 1NNN: Jump to location nnn.
                 self.pc = nnn
             case 0x2:
+                # X
                 # 2NNN: Call subroutine at nnn.
                 self.stack_ptr += 1
                 self.stack[self.stack_ptr] = self.pc
                 self.pc = nnn
             case 0x3:
-                # 3XKK
-                pass
+                # 3XKK: Skip next instruction if Vx = kk.
+                if UInt16(self.v[x]) == kk:
+                    self.pc += 2
             case 0x4:
-                # 4XKK
-                pass
+                # 4XKK: Skip next instruction if Vx != kk.
+                if UInt16(self.v[x]) != kk:
+                    self.pc += 2
             case 0x5:
-                # 5XY0
-                pass
+                # 5XY0: Skip next instruction if Vx = Vy.
+                if self.v[x] == self.v[y]:
+                    self.pc += 2
             case 0x6:
                 # 6XKK: puts the value kk into register Vx.
                 self.v[x] = UInt8(kk)
             case 0x7:
+                # O
                 # 7XKK: Set Vx = Vx + kk.
                 self.v[x] += UInt8(kk)
             case 0x8:
+                # O
                 match n:
                     case 0x0:
+                        # O
                         # 8XY0: Set Vx = Vy.
                         self.v[x] = self.v[y]
                     case 0x1:
+                        # O
                         # 8XY1: Set Vx = Vx OR Vy.
                         self.v[x] |= self.v[y]
                     case 0x2:
+                        # O
                         # 8XY2: Set Vx = Vx AND Vy.
                         self.v[x] &= self.v[y]
                     case 0x3:
+                        # O
                         # 8XY3: Set Vx = Vx XOR Vy.
                         self.v[x] ^= self.v[y]
                     case 0x4:
+                        # O
                         # 8XY4: Set Vx = Vx + Vy, set VF = carry.
                         var num = UInt16(self.v[x]) + UInt16(self.v[y])
-                        self.v[0xF] = 1 if num > 255 else 0
                         self.v[x] = UInt8(num)
+                        self.v[0xF] = 1 if num > 255 else 0
                     case 0x5:
+                        # O
                         # 8XY5: Set Vx = Vx - Vy, set VF = NOT borrow.
-                        self.v[0xF] = 1 if self.v[x] > self.v[y] else 0
+                        var num = self.v[x]
                         self.v[x] -= self.v[y]
+                        self.v[0xF] = 1 if num >= self.v[y] else 0
                     case 0x6:
+                        # O
                         # 8XY6: Set Vx = Vx SHR 1.
                         var bit = self.v[x] & 1
+                        self.v[x] >>= 1
                         self.v[0xF] = bit
-                        self.v[x] /= 2
                     case 0x7:
+                        # O
                         # 8XY7: Set Vx = Vy - Vx, set VF = NOT borrow.
-                        self.v[0xF] = 1 if self.v[y] > self.v[x] else 0
-                        self.v[y] -= self.v[x]
+                        var num = self.v[x]
+                        self.v[x] = self.v[y] - self.v[x]
+                        self.v[0xF] = 1 if self.v[y] >= num else 0
                     case 0xE:
+                        # O
                         # 8XYE: Set Vx = Vx SHL 1.
-                        if self.v[x] != self.v[y]:
-                            self.pc += 2
+                        var bit = self.v[x] >> 7
+                        self.v[x] *= 2
+                        self.v[0xF] = bit
             case 0x9:
                 # 9XY0
-                pass
+                if self.v[x] != self.v[y]:
+                    self.pc += 2
             case 0xA:
                 # ANNN: Set I = nnn.
                 self.i = nnn
@@ -196,7 +217,6 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                 self.pc = nnn + UInt16(self.v[0])
             case 0xC:
                 # CXKK: Set Vx = random byte AND kk.
-                seed()
                 self.v[x] = UInt8(UInt16(random_ui64(0, 255)) & kk)
             case 0xD:
                 # DXYN: Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision. (more in manual)
@@ -249,11 +269,9 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         self.i += UInt16(self.v[x])
                     case 0x29:
                         # FX29: Set I = location of sprite for digit Vx.
-                        for ind in range(0, 0x200 - 1):
-                            if self.memory[ind] == self.v[x]:
-                                self.i = UInt16(ind)
-                                break
+                        self.i = (UInt16(self.v[x]) & 0xF) * 5 + FNT_MEM_ADR
                     case 0x33:
+                        # X
                         # FX33: Store BCD representation of Vx in memory locations I, I+1, and I+2.
                         var dec = self.v[x]
                         # only the remainder after dec/10
@@ -266,12 +284,14 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         self.memory[self.i + 1] = tens
                         self.memory[self.i + 2] = ones
                     case 0x55:
+                        # X
                         # FX55: Store registers V0 through Vx in memory starting at location I.
-                        for ind in range(x):
+                        for ind in range(x + 1):
                             self.memory[self.i + ind] = self.v[ind]
                     case 0x65:
+                        # X
                         # FX65: Read registers V0 through Vx from memory starting at location I.
-                        for ind in range(x):
+                        for ind in range(x + 1):
                             self.v[ind] = self.memory[self.i + ind]
 
 
@@ -299,6 +319,7 @@ struct Emulator[]:
         self.rom = List[UInt8]()
         self.get_rom()
         self.CHIP8.load_rom(self.rom)
+        seed()
 
     def get_rom(mut self) raises:
         var path = self.args[1]
