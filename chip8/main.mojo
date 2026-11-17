@@ -86,6 +86,161 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         if self.timer_sound != 0:
             self.timer_sound -= 1
 
+    def step(mut self):
+        var code = self.fetch()
+        self.execute(code)
+
+    def fetch(mut self) -> UInt16:
+        var code = UInt16(self.memory[self.pc]) << 8 | UInt16(
+            self.memory[self.pc + 1]
+        )
+        self.pc += 2
+        return code
+
+    def execute(mut self, code: UInt16):
+        # format: xyn
+        var first = (code >> 12) & 0xF
+        var x = (code >> 8) & 0xF
+        var y = (code >> 4) & 0xF
+        var kk = code & 0xFF
+        var n = code & 0xF
+        var nnn = code & 0xFFF
+        match first:
+            case 0x0:
+                match kk:
+                    case 0xE0:
+                        # 00E0: Clear the display.
+                        self.display = Array[Array[Bool, 64], 32]()
+                    case 0xEE:
+                        # 00EE
+                        pass
+                    case _:
+                        # 0NNN
+                        pass
+            case 0x1:
+                # 1NNN: Jump to location nnn.
+                self.pc = nnn
+            case 0x2:
+                # 2NNN
+                pass
+            case 0x3:
+                # 3XKK
+                pass
+            case 0x4:
+                # 4XKK
+                pass
+            case 0x5:
+                # 5XY0
+                pass
+            case 0x6:
+                # 6XKK: puts the value kk into register Vx.
+                self.v[x] = UInt8(kk)
+            case 0x7:
+                # 7XKK: Set Vx = Vx + kk.
+                self.v[x] += UInt8(kk)
+            case 0x8:
+                match n:
+                    case 0x0:
+                        # 8XY0
+                        pass
+                    case 0x1:
+                        # 8XY1
+                        pass
+                    case 0x2:
+                        # 8XY2
+                        pass
+                    case 0x3:
+                        # 8XY3
+                        pass
+                    case 0x4:
+                        # 8XY4
+                        pass
+                    case 0x5:
+                        # 8XY5
+                        pass
+                    case 0x6:
+                        # 8XY6
+                        pass
+                    case 0x7:
+                        # 8XY7
+                        pass
+                    case 0xE:
+                        # 8XYE
+                        pass
+            case 0x9:
+                # 9XY0
+                pass
+            case 0xA:
+                # ANNN: Set I = nnn.
+                self.i = nnn
+            case 0xB:
+                # BNNN
+                pass
+            case 0xC:
+                # CXKK
+                pass
+            case 0xD:
+                # DXYN: Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision. (more in manual)
+
+                var px = self.v[x] % 64
+                var x_w = px
+                var py = self.v[y] % 32
+                self.v[0xF] = 0
+                for row in range(n):
+                    var sprite_data = self.memory[self.i + row]
+                    px = x_w
+
+                    for a in range(8):
+                        if px == 64:
+                            break
+                        var bit = sprite_data >> UInt8(7 - a) & 1
+                        if bit:
+                            if self.display[py][px]:
+                                self.v[0xF] = 1
+                            self.display[py][px] = not self.display[py][px]
+                        px += 1
+                    py += 1
+                    if py == 32:
+                        break
+
+            case 0xE:
+                match kk:
+                    # EX9E
+                    case 0x9E:
+                        pass
+                    # EXA1
+                    case 0xA1:
+                        pass
+            case 0xF:
+                match kk:
+                    # FX07
+                    case 0x07:
+                        pass
+                    # FX0A
+                    case 0x0A:
+                        pass
+                    # FX15
+                    case 0x15:
+                        pass
+                    # FX18
+                    case 0x18:
+                        pass
+                    # FX1E
+                    case 0x1E:
+                        pass
+                    # FX29
+                    case 0x29:
+                        pass
+                    # FX33
+                    case 0x33:
+                        pass
+                    # FX55
+                    case 0x55:
+                        pass
+                    # FX65
+                    case 0x65:
+                        pass
+
 
 @fieldwise_init
 struct CHIP8Model(Equatable):
