@@ -1,5 +1,5 @@
 from std.memory import Layout
-from std.time import sleep
+from std.time import perf_counter_ns, sleep
 from std.sys import argv
 from std.os import *
 from std.random import random_ui64, seed
@@ -120,7 +120,6 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         # 00E0: Clear the display.
                         self.display = Array[Array[Bool, 64], 32]()
                     case 0xEE:
-                        # X
                         # 00EE: Return from a subroutine.
                         self.pc = self.stack[self.stack_ptr]
                         self.stack_ptr -= 1
@@ -128,11 +127,9 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         # 0NNN
                         pass
             case 0x1:
-                # O
                 # 1NNN: Jump to location nnn.
                 self.pc = nnn
             case 0x2:
-                # X
                 # 2NNN: Call subroutine at nnn.
                 self.stack_ptr += 1
                 self.stack[self.stack_ptr] = self.pc
@@ -153,54 +150,43 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                 # 6XKK: puts the value kk into register Vx.
                 self.v[x] = UInt8(kk)
             case 0x7:
-                # O
                 # 7XKK: Set Vx = Vx + kk.
                 self.v[x] += UInt8(kk)
             case 0x8:
-                # O
                 match n:
                     case 0x0:
-                        # O
                         # 8XY0: Set Vx = Vy.
                         self.v[x] = self.v[y]
                     case 0x1:
-                        # O
                         # 8XY1: Set Vx = Vx OR Vy.
                         self.v[x] |= self.v[y]
                     case 0x2:
-                        # O
                         # 8XY2: Set Vx = Vx AND Vy.
                         self.v[x] &= self.v[y]
                     case 0x3:
-                        # O
                         # 8XY3: Set Vx = Vx XOR Vy.
                         self.v[x] ^= self.v[y]
                     case 0x4:
-                        # O
                         # 8XY4: Set Vx = Vx + Vy, set VF = carry.
                         var num = UInt16(self.v[x]) + UInt16(self.v[y])
                         self.v[x] = UInt8(num)
                         self.v[0xF] = 1 if num > 255 else 0
                     case 0x5:
-                        # O
                         # 8XY5: Set Vx = Vx - Vy, set VF = NOT borrow.
                         var num = self.v[x]
                         self.v[x] -= self.v[y]
                         self.v[0xF] = 1 if num >= self.v[y] else 0
                     case 0x6:
-                        # O
                         # 8XY6: Set Vx = Vx SHR 1.
                         var bit = self.v[x] & 1
                         self.v[x] >>= 1
                         self.v[0xF] = bit
                     case 0x7:
-                        # O
                         # 8XY7: Set Vx = Vy - Vx, set VF = NOT borrow.
                         var num = self.v[x]
                         self.v[x] = self.v[y] - self.v[x]
                         self.v[0xF] = 1 if self.v[y] >= num else 0
                     case 0xE:
-                        # O
                         # 8XYE: Set Vx = Vx SHL 1.
                         var bit = self.v[x] >> 7
                         self.v[x] *= 2
@@ -271,7 +257,6 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         # FX29: Set I = location of sprite for digit Vx.
                         self.i = (UInt16(self.v[x]) & 0xF) * 5 + FNT_MEM_ADR
                     case 0x33:
-                        # X
                         # FX33: Store BCD representation of Vx in memory locations I, I+1, and I+2.
                         var dec = self.v[x]
                         # only the remainder after dec/10
@@ -284,12 +269,10 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         self.memory[self.i + 1] = tens
                         self.memory[self.i + 2] = ones
                     case 0x55:
-                        # X
                         # FX55: Store registers V0 through Vx in memory starting at location I.
                         for ind in range(x + 1):
                             self.memory[self.i + ind] = self.v[ind]
                     case 0x65:
-                        # X
                         # FX65: Read registers V0 through Vx from memory starting at location I.
                         for ind in range(x + 1):
                             self.v[ind] = self.memory[self.i + ind]
@@ -308,6 +291,9 @@ trait Frontable:
     ...
 
 
+comptime FRAME_TIME: Int = Int(Float64(1.0 / 60.0) * 1e9)
+
+
 struct Emulator[]:
     var CHIP8: Core[]
     var rom: List[UInt8]
@@ -323,30 +309,37 @@ struct Emulator[]:
 
     def get_rom(mut self) raises:
         var path = self.args[1]
-        var file = FileHandle(path, "r")
+        var file = open(path, "r")
         var size = file.seek(0, SEEK_END)
         _ = file.seek(0, SEEK_SET)
+        var bytes = file.read_bytes(Int(size))
 
-        var ptr: Pointer[UInt8, MutUntrackedOrigin] = alloc(
-            Layout[UInt8](count=Int(size))
-        ).unsafe_leak()
-        var buffer = Span[UInt8, MutUntrackedOrigin](
-            unsafe_ptr=ptr, length=Int(size)
-        )
-        _ = file.read(buffer)
-
-        var bytes = List[UInt8]()
-        for i in range(size):
-            bytes.append(ptr[unsafe_offset=i])
-
-        print(t"Path: {path}\nSize:{size}\nContents: {bytes}")
+        # print(t"Path: {path}\nSize:{size}\nContents: {bytes}")
         self.rom = bytes^
 
-    def present(mut self) raises:
+    @always_inline
+    def run(mut self) raises:
+        var frame_start: Int
+        var frame_end: Int
+        var frame_dur: Int
+        while True:
+            frame_start = perf_counter_ns()
+            # CHANGE RANGE
+            for _ in range(12):
+                self.CHIP8.step()
+            self.CHIP8.tick_timers()
+            self.draw()
+            frame_end = perf_counter_ns()
+            frame_dur = frame_end - frame_start
+            if frame_dur < FRAME_TIME:
+                sleep(FRAME_TIME - frame_dur)
+            elif frame_dur >= FRAME_TIME:
+                pass
+
+    def draw(mut self) raises:
         var screen: String
         print("\x1b[2J")
         while True:
-            self.CHIP8.step()
             screen = "\x1b[H"
 
             for y in range(32):
@@ -357,7 +350,6 @@ struct Emulator[]:
                         screen += "  "
                 screen += "\n"
             print(screen, end="", flush=True)
-            sleep(1.0 / 60.0)
 
 
 struct Frontend(Frontable):
@@ -366,4 +358,4 @@ struct Frontend(Frontable):
 
 def main() raises:
     var emu = Emulator()
-    emu.present()
+    emu.run()
