@@ -2,6 +2,7 @@ from std.memory import Layout
 from std.time import sleep
 from std.sys import argv
 from std.os import *
+from std.random import random_ui64, seed
 
 comptime FONT: Array[UInt8, 80] = [
     # fmt: off
@@ -111,6 +112,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         var kk = code & 0xFF
         var n = code & 0xF
         var nnn = code & 0xFFF
+        # the FX__ group (except FX0A). Check them with Timendus's test suite: 3-corax+.ch8 checks most instructions and shows a pass/fail mark next to each. 4-flags.ch8 checks VF behavior in the arithmetic instructions, including the case where X is F.
         match first:
             case 0x0:
                 match kk:
@@ -118,8 +120,9 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         # 00E0: Clear the display.
                         self.display = Array[Array[Bool, 64], 32]()
                     case 0xEE:
-                        # 00EE
-                        pass
+                        # 00EE: Return from a subroutine.
+                        self.pc = self.stack[self.stack_ptr]
+                        self.stack_ptr -= 1
                     case _:
                         # 0NNN
                         pass
@@ -127,8 +130,10 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                 # 1NNN: Jump to location nnn.
                 self.pc = nnn
             case 0x2:
-                # 2NNN
-                pass
+                # 2NNN: Call subroutine at nnn.
+                self.stack_ptr += 1
+                self.stack[self.stack_ptr] = self.pc
+                self.pc = nnn
             case 0x3:
                 # 3XKK
                 pass
@@ -147,32 +152,39 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
             case 0x8:
                 match n:
                     case 0x0:
-                        # 8XY0
-                        pass
+                        # 8XY0: Set Vx = Vy.
+                        self.v[x] = self.v[y]
                     case 0x1:
-                        # 8XY1
-                        pass
+                        # 8XY1: Set Vx = Vx OR Vy.
+                        self.v[x] |= self.v[y]
                     case 0x2:
-                        # 8XY2
-                        pass
+                        # 8XY2: Set Vx = Vx AND Vy.
+                        self.v[x] &= self.v[y]
                     case 0x3:
-                        # 8XY3
-                        pass
+                        # 8XY3: Set Vx = Vx XOR Vy.
+                        self.v[x] ^= self.v[y]
                     case 0x4:
-                        # 8XY4
-                        pass
+                        # 8XY4: Set Vx = Vx + Vy, set VF = carry.
+                        var num = UInt16(self.v[x]) + UInt16(self.v[y])
+                        self.v[0xF] = 1 if num > 255 else 0
+                        self.v[x] = UInt8(num)
                     case 0x5:
-                        # 8XY5
-                        pass
+                        # 8XY5: Set Vx = Vx - Vy, set VF = NOT borrow.
+                        self.v[0xF] = 1 if self.v[x] > self.v[y] else 0
+                        self.v[x] -= self.v[y]
                     case 0x6:
-                        # 8XY6
-                        pass
+                        # 8XY6: Set Vx = Vx SHR 1.
+                        var bit = self.v[x] & 1
+                        self.v[0xF] = bit
+                        self.v[x] /= 2
                     case 0x7:
-                        # 8XY7
-                        pass
+                        # 8XY7: Set Vx = Vy - Vx, set VF = NOT borrow.
+                        self.v[0xF] = 1 if self.v[y] > self.v[x] else 0
+                        self.v[y] -= self.v[x]
                     case 0xE:
-                        # 8XYE
-                        pass
+                        # 8XYE: Set Vx = Vx SHL 1.
+                        if self.v[x] != self.v[y]:
+                            self.pc += 2
             case 0x9:
                 # 9XY0
                 pass
@@ -180,11 +192,12 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                 # ANNN: Set I = nnn.
                 self.i = nnn
             case 0xB:
-                # BNNN
-                pass
+                # BNNN: Jump to location nnn + V0.
+                self.pc = nnn + UInt16(self.v[0])
             case 0xC:
-                # CXKK
-                pass
+                # CXKK: Set Vx = random byte AND kk.
+                seed()
+                self.v[x] = UInt8(UInt16(random_ui64(0, 255)) & kk)
             case 0xD:
                 # DXYN: Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision. (more in manual)
 
@@ -211,41 +224,55 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
 
             case 0xE:
                 match kk:
-                    # EX9E
                     case 0x9E:
+                        # EX9E
                         pass
-                    # EXA1
                     case 0xA1:
+                        # EXA1
                         pass
             case 0xF:
                 match kk:
-                    # FX07
                     case 0x07:
-                        pass
-                    # FX0A
+                        # FX07: Set Vx = delay timer value.
+                        self.v[x] = self.timer_delay
                     case 0x0A:
+                        # FX0A
                         pass
-                    # FX15
                     case 0x15:
-                        pass
-                    # FX18
+                        # FX15: Set delay timer = Vx.
+                        self.timer_delay = self.v[x]
                     case 0x18:
-                        pass
-                    # FX1E
+                        # FX18: Set sound timer = Vx.
+                        self.timer_sound = self.v[x]
                     case 0x1E:
-                        pass
-                    # FX29
+                        # FX1E: Set I = I + Vx.
+                        self.i += UInt16(self.v[x])
                     case 0x29:
-                        pass
-                    # FX33
+                        # FX29: Set I = location of sprite for digit Vx.
+                        for ind in range(0, 0x200 - 1):
+                            if self.memory[ind] == self.v[x]:
+                                self.i = UInt16(ind)
+                                break
                     case 0x33:
-                        pass
-                    # FX55
+                        # FX33: Store BCD representation of Vx in memory locations I, I+1, and I+2.
+                        var dec = self.v[x]
+                        # only the remainder after dec/10
+                        var ones = dec % 10
+                        # dec//10 discards the ones place, then % to get the remainder
+                        var tens = (dec // 10) % 10
+                        # dec//100 discards the tens and ones place
+                        var hunds = dec // 100
+                        self.memory[self.i] = hunds
+                        self.memory[self.i + 1] = tens
+                        self.memory[self.i + 2] = ones
                     case 0x55:
-                        pass
-                    # FX65
+                        # FX55: Store registers V0 through Vx in memory starting at location I.
+                        for ind in range(x):
+                            self.memory[self.i + ind] = self.v[ind]
                     case 0x65:
-                        pass
+                        # FX65: Read registers V0 through Vx from memory starting at location I.
+                        for ind in range(x):
+                            self.v[ind] = self.memory[self.i + ind]
 
 
 @fieldwise_init
