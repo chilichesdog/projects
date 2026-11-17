@@ -22,6 +22,7 @@ comptime FONT: Array[UInt8, 80] = [
 # fmt: on
 
 comptime FNT_MEM_ADR = 0x050
+comptime PRGM_MEM_START = 0x200
 
 
 # memory: CHIP-8 has direct access to up to 4 kilobytes of RAM
@@ -56,7 +57,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         self.memory = Array[UInt8, 4096]()
         self.display = Array[Array[Bool, 64], 32]()
         self.i = 0
-        self.pc = UInt16(0x200)
+        self.pc = UInt16(PRGM_MEM_START)
         self.stack = Array[UInt16, 16]()
         self.stack_ptr = 0
         self.timer_delay = 0
@@ -70,9 +71,14 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         for ind, f in enumerate(font):
             self.memory[FNT_MEM_ADR + ind] = f
 
-    def load_rom(mut self, bytes: List[Int]):
+    def load_rom(mut self, bytes: List[UInt8]) raises:
+        if bytes.byte_length() > len(self.memory) - PRGM_MEM_START:
+            raise "Error: ROM too large."
+        elif bytes.byte_length() == 0:
+            raise "Error: empty ROM."
+        # if you later add a feature to load a new rom, you'll need to clear program memory first and raise an error if there are still leftover bytes
         for ind, byte in enumerate(bytes):
-            self.memory[self.pc + UInt16(ind)] = UInt8(byte)
+            self.memory[PRGM_MEM_START + ind] = byte
 
     def tick_timers(mut self):
         if self.timer_delay != 0:
