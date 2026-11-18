@@ -1,7 +1,3 @@
-# 2310831-VCLKHm9HrAkWmNB1FQZM3upukbMm7NZw2LkNieSp
-# recovery code
-
-
 struct SumSquares:
     var total: Int
 

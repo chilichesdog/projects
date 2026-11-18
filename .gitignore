@@ -4,3 +4,9 @@
 _mojo-debug/
 a.out
 main
+
+# third-party test ROMs
+chip8/chip8-test-suite/
+
+# euler recovery key
+rkey.txt
