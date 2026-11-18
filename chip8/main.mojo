@@ -112,7 +112,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         var kk = code & 0xFF
         var n = code & 0xF
         var nnn = code & 0xFFF
-        # Check them with Timendus's test suite: 3-corax+.ch8 checks most instructions and shows a pass/fail mark next to each. 4-flags.ch8 checks VF behavior in the arithmetic instructions, including the case where X is F.
+
         match first:
             case 0x0:
                 match kk:
@@ -327,7 +327,8 @@ struct Emulator[F: Frontable]:
             frame_end = perf_counter_ns()
             frame_dur = frame_end - frame_start
             if frame_dur < FRAME_TIME:
-                sleep((FRAME_TIME - frame_dur) / 1e9)
+                var sleep_time = Float64(FRAME_TIME - frame_dur)
+                sleep(sleep_time / Float64(1e9))
 
 
 trait Frontable(Defaultable, Deinitable, Movable):
