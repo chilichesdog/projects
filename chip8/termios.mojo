@@ -40,6 +40,8 @@ def main():
     _ = external_call["tcsetattr", c_uint](fd, TCSAFLUSH, Pointer(to=default))
     print("Raw mode deactivated.")
     print(buf)
+    # 49, 50, 51, 52, 113, 119, 101, 114, 97, 115, 100, 102,
+    # 1    2   3   4   q    w    e    r    a  s    d    f
 
 
 # def tcgetattr(fd: Int32, termios_p: termios) -> Int32:
