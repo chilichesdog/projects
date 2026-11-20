@@ -3,6 +3,7 @@ from std.time import perf_counter_ns, sleep
 from std.sys import argv
 from std.os import *
 from std.random import random_ui64, seed
+from termios import *
 
 comptime FONT: Array[UInt8, 80] = [
     # fmt: off
@@ -332,31 +333,70 @@ struct Emulator[F: Frontable]:
 
 
 trait Frontable(Defaultable, Deinitable, Movable):
+    @always_inline
     def draw(mut self, CHIP8: Core) raises:
         ...
 
+    @always_inline
     def clear_screen(self):
         ...
 
+    @always_inline
+    def poll_keys(self):
+        ...
 
-@fieldwise_init
+
 struct TermFrontend(Frontable):
+    var screen: String
+    var key_buf: Array[UInt8, 32]
+    var term_def: termios
+    var term_raw: termios
+
+    def __init__(out self):
+        self.screen = String()
+        self.key_buf = Array[UInt8, 32]()
+        self.term_def = termios()
+
+        # get default terminal attributes, store in term_def
+        _ = external_call["tcgetattr", c_uint](0, Pointer(to=self.term_def))
+        self.term_raw = self.term_def.copy()
+        self.term_raw.c_lflag &= ~(ICANON | ECHO)
+        self.term_raw.c_cc[VTIME] = 0
+        self.term_raw.c_cc[VMIN] = 0
+
     def clear_screen(self):
         print("\x1b[2J")
 
-    @always_inline
     def draw(mut self, CHIP8: Core) raises:
-        var screen: String
-        screen = "\x1b[H"
+        # what does this one do?
+        self.screen = "\x1b[H"
 
         for y in range(32):
             for x in range(64):
                 if CHIP8.display[y][x]:
-                    screen += "██"
+                    self.screen += "██"
                 else:
-                    screen += "  "
-            screen += "\n"
-        print(screen, end="", flush=True)
+                    self.screen += "  "
+            self.screen += "\n"
+        print(self.screen, end="", flush=True)
+
+    def raw_mode_on(self):
+        _ = external_call["tcsetattr", c_uint](
+            0, TCSAFLUSH, Pointer(to=self.term_raw)
+        )
+        print("Raw mode activated.")
+
+    def raw_mode_off(self):
+        _ = external_call["tcsetattr", c_uint](
+            0, TCSAFLUSH, Pointer(to=self.term_def)
+        )
+        print("Raw mode deactivated.")
+
+    def poll_keys(self):
+        # read from stdin into the keys buffer
+        _ = external_call["read", c_uint](0, Pointer(to=self.key_buf), 32)
+        # 49, 50, 51, 52, 113, 119, 101, 114, 97, 115, 100, 102,
+        # 1    2   3   4   q    w    e    r    a   s    d    f
 
 
 def main() raises:
