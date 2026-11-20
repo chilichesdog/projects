@@ -24,6 +24,7 @@ struct termios(Copyable, Defaultable):
 
 
 def main():
+    """Tests termios and raw mode."""
     var fd: c_int = 0
     var term = termios()
     _ = external_call["tcgetattr", c_uint](fd, Pointer(to=term))
@@ -42,11 +43,3 @@ def main():
     print(buf)
     # 49, 50, 51, 52, 113, 119, 101, 114, 97, 115, 100, 102,
     # 1    2   3   4   q    w    e    r    a  s    d    f
-
-
-# def tcgetattr(fd: Int32, termios_p: termios) -> Int32:
-#     return 0
-
-
-# def tcsetattr(fd: Int32, optional_actions: Int32, termios_p: termios) -> Int32:
-#     return 0
