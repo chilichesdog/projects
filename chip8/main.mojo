@@ -1,4 +1,5 @@
 from std.memory import Layout
+from std.bit import count_trailing_zeros
 from std.time import perf_counter_ns, sleep
 from std.sys import argv
 from std.os import *
@@ -56,7 +57,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
     var timer_delay: UInt8
     var timer_sound: UInt8
     var v: Array[UInt8, 16]
-    var keys: Array[Bool, 16]
+    var keys_down: UInt16
 
     def __init__(out self):
         self.memory = Array[UInt8, 4096]()
@@ -68,7 +69,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         self.timer_delay = 0
         self.timer_sound = 0
         self.v = Array[UInt8, 16]()
-        self.keys = Array[Bool, 16]()
+        self.keys_down = 0
         self.load_font()
 
     def load_font(mut self):
@@ -232,19 +233,28 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
             case 0xE:
                 match kk:
                     case 0x9E:
-                        # EX9E
-                        pass
+                        # EX9E: Skip next instruction if key with the value of Vx is pressed.
+                        var key = self.v[x]
+                        if (self.keys_down >> UInt16(key)) & 0x1:
+                            self.pc += 2
                     case 0xA1:
-                        # EXA1
-                        pass
+                        # EXA1: Skip next instruction if key with the value of Vx is not pressed.
+                        var key = self.v[x]
+                        if not (self.keys_down >> UInt16(key)) & 0x1:
+                            self.pc += 2
             case 0xF:
                 match kk:
                     case 0x07:
                         # FX07: Set Vx = delay timer value.
                         self.v[x] = self.timer_delay
                     case 0x0A:
-                        # FX0A
-                        pass
+                        # FX0A: Wait for a key press, store the value of the key in Vx.
+                        if self.keys_down == 0x0:
+                            self.pc -= 2
+                        else:
+                            self.v[x] = UInt8(
+                                count_trailing_zeros(UInt16(self.keys_down))
+                            )
                     case 0x15:
                         # FX15: Set delay timer = Vx.
                         self.timer_delay = self.v[x]
@@ -315,16 +325,24 @@ struct Emulator[F: Frontable]:
         self.rom = bytes^
 
     def run(mut self) raises:
+        self.frontend.clear_screen()
         var frame_start: Int
         var frame_end: Int
         var frame_dur: Int
+
         while True:
             frame_start = perf_counter_ns()
+            self.CHIP8.keys_down = self.frontend.poll_keys()
+            if self.frontend.should_quit():
+                break
+
             # CHANGE RANGE
             for _ in range(12):
                 self.CHIP8.step()
+
             self.CHIP8.tick_timers()
             self.frontend.draw(self.CHIP8)
+
             frame_end = perf_counter_ns()
             frame_dur = frame_end - frame_start
             if frame_dur < FRAME_TIME:
@@ -333,6 +351,8 @@ struct Emulator[F: Frontable]:
 
 
 trait Frontable(Defaultable, Deinitable, Movable):
+    """Describes a type that interacts with the hardware."""
+
     @always_inline
     def draw(mut self, CHIP8: Core) raises:
         ...
@@ -342,25 +362,41 @@ trait Frontable(Defaultable, Deinitable, Movable):
         ...
 
     @always_inline
-    def poll_keys(self):
+    def poll_keys(mut self) -> UInt16:
+        ...
+
+    def should_quit(self) -> Bool:
         ...
 
 
 struct TermFrontend(Frontable):
     var screen: String
-    var key_buf: Array[UInt8, 32]
+    var key_buf: Array[UInt8, 16]
+    var num_keys: Int
+    var keys_down_byte: UInt16
     var term_def: termios
     var term_raw: termios
+    var quit_requested: Bool
 
     def __init__(out self):
         self.screen = String()
-        self.key_buf = Array[UInt8, 32]()
+        self.key_buf = Array[UInt8, 16]()
+        self.num_keys = 0
+        self.keys_down_byte = 0
+        self.quit_requested = False
         self.term_def = termios()
 
         # get default terminal attributes, store in term_def
-        _ = external_call["tcgetattr", c_uint](0, Pointer(to=self.term_def))
+        _ = external_call["tcgetattr", c_uint](fd, Pointer(to=self.term_def))
         self.term_raw = self.term_def.copy()
-        self.term_raw.c_lflag &= ~(ICANON | ECHO)
+        self.init_raw_term()
+        self.raw_mode_on()
+
+    def __deinit__(deinit self):
+        self.raw_mode_off()
+
+    def init_raw_term(mut self):
+        self.term_raw.c_lflag &= ~(ICANON | ECHO | ISIG)
         self.term_raw.c_cc[VTIME] = 0
         self.term_raw.c_cc[VMIN] = 0
 
@@ -368,7 +404,7 @@ struct TermFrontend(Frontable):
         print("\x1b[2J")
 
     def draw(mut self, CHIP8: Core) raises:
-        # what does this one do?
+        # move cursor to top left corner
         self.screen = "\x1b[H"
 
         for y in range(32):
@@ -382,23 +418,80 @@ struct TermFrontend(Frontable):
 
     def raw_mode_on(self):
         _ = external_call["tcsetattr", c_uint](
-            0, TCSAFLUSH, Pointer(to=self.term_raw)
+            fd, TCSAFLUSH, Pointer(to=self.term_raw)
         )
-        print("Raw mode activated.")
 
     def raw_mode_off(self):
         _ = external_call["tcsetattr", c_uint](
-            0, TCSAFLUSH, Pointer(to=self.term_def)
+            fd, TCSAFLUSH, Pointer(to=self.term_def)
         )
-        print("Raw mode deactivated.")
 
-    def poll_keys(self):
+    def should_quit(self) -> Bool:
+        return self.quit_requested
+
+    def poll_keys(mut self) -> UInt16:
+        self.keys_down_byte = 0
         # read from stdin into the keys buffer
-        _ = external_call["read", c_uint](0, Pointer(to=self.key_buf), 32)
-        # 49, 50, 51, 52, 113, 119, 101, 114, 97, 115, 100, 102,
-        # 1    2   3   4   q    w    e    r    a   s    d    f
+        self.num_keys = external_call["read", Int](
+            fd, Pointer(to=self.key_buf), 16
+        )
+        for a in range(self.num_keys):
+            var code = self.key_buf[a]
+            var key = self.code_to_key(code)
+            if key == 0xF0:
+                self.quit_requested = True
+                continue
+            elif key == 0xF1:
+                continue
+            self.keys_down_byte |= 0x1 << UInt16(key)
+
+        return self.keys_down_byte
+
+    @staticmethod
+    def code_to_key(code: UInt8) -> UInt8:
+        var key: UInt8
+
+        match code:
+            case 49:
+                key = 0x1
+            case 50:
+                key = 0x2
+            case 51:
+                key = 0x3
+            case 52:
+                key = 0xC
+            case 113:
+                key = 0x4
+            case 119:
+                key = 0x5
+            case 101:
+                key = 0x6
+            case 114:
+                key = 0xD
+            case 97:
+                key = 0x7
+            case 115:
+                key = 0x8
+            case 100:
+                key = 0x9
+            case 102:
+                key = 0xE
+            case 122:
+                key = 0xA
+            case 120:
+                key = 0x0
+            case 99:
+                key = 0xB
+            case 118:
+                key = 0xF
+            case 0x3:
+                key = 0xF0
+            case _:
+                key = 0xF1
+
+        return key
 
 
 def main() raises:
-    var emu = Emulator[TermFrontend[]]()
+    var emu = Emulator[TermFrontend]()
     emu.run()

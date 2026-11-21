@@ -1,10 +1,12 @@
 from std.ffi import *
 from std.time import sleep
 
+comptime fd: c_int = 0
 comptime NCCS = 32
 comptime tcflag_t = c_uint
 comptime cc_t = c_uchar
 comptime ICANON = 0o2
+comptime ISIG = 0o1
 comptime ECHO = 0o10
 comptime VTIME = 5
 comptime VMIN = 6
@@ -41,5 +43,5 @@ def main():
     _ = external_call["tcsetattr", c_uint](fd, TCSAFLUSH, Pointer(to=default))
     print("Raw mode deactivated.")
     print(buf)
-    # 49, 50, 51, 52, 113, 119, 101, 114, 97, 115, 100, 102,
-    # 1    2   3   4   q    w    e    r    a  s    d    f
+    # 49, 50, 51, 52, 113, 119, 101, 114, 97, 115, 100, 102, 122, 120, 99, 118
+    # 1    2   3   4   q    w    e    r    a  s    d    f     z    x    c   v
