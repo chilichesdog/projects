@@ -58,6 +58,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
     var timer_sound: UInt8
     var v: Array[UInt8, 16]
     var keys_down: UInt16
+    var waiting_key: Optional[UInt8]
 
     def __init__(out self):
         self.memory = Array[UInt8, 4096]()
@@ -70,6 +71,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
         self.timer_sound = 0
         self.v = Array[UInt8, 16]()
         self.keys_down = 0
+        self.waiting_key = None
         self.load_font()
 
     def load_font(mut self):
@@ -249,12 +251,21 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                         self.v[x] = self.timer_delay
                     case 0x0A:
                         # FX0A: Wait for a key press, store the value of the key in Vx.
-                        if self.keys_down == 0x0:
-                            self.pc -= 2
+                        var key = UInt8(
+                            count_trailing_zeros(UInt16(self.keys_down))
+                        )
+                        if self.waiting_key == None:
+                            if self.keys_down == 0x0:
+                                self.pc -= 2
+                            else:
+                                self.waiting_key = key
+                                self.pc -= 2
                         else:
-                            self.v[x] = UInt8(
-                                count_trailing_zeros(UInt16(self.keys_down))
-                            )
+                            if self.keys_down == 0x0:
+                                self.v[x] = key
+                                self.waiting_key = None
+                            else:
+                                self.pc -= 2
                     case 0x15:
                         # FX15: Set delay timer = Vx.
                         self.timer_delay = self.v[x]
@@ -341,6 +352,8 @@ struct Emulator[F: Frontable]:
                 self.CHIP8.step()
 
             self.CHIP8.tick_timers()
+            if self.CHIP8.timer_sound > 0:
+                self.frontend.set_beep()
             self.frontend.draw(self.CHIP8)
 
             frame_end = perf_counter_ns()
@@ -361,6 +374,9 @@ trait Frontable(Defaultable, Deinitable, Movable):
     def clear_screen(self):
         ...
 
+    def set_beep(self):
+        ...
+
     @always_inline
     def poll_keys(mut self) -> UInt16:
         ...
@@ -374,15 +390,18 @@ struct TermFrontend(Frontable):
     var key_buf: Array[UInt8, 16]
     var num_keys: Int
     var keys_down_byte: UInt16
+    var keys_down_time: Array[Int, 16]
     var term_def: termios
     var term_raw: termios
     var quit_requested: Bool
+    comptime KEY_DOWN_TIMEOUT: Int = 100
 
     def __init__(out self):
         self.screen = String()
         self.key_buf = Array[UInt8, 16]()
         self.num_keys = 0
         self.keys_down_byte = 0
+        self.keys_down_time = Array[Int, 16]()
         self.quit_requested = False
         self.term_def = termios()
 
@@ -416,6 +435,9 @@ struct TermFrontend(Frontable):
             self.screen += "\n"
         print(self.screen, end="", flush=True)
 
+    def set_beep(self):
+        print("\x07")
+
     def raw_mode_on(self):
         _ = external_call["tcsetattr", c_uint](
             fd, TCSAFLUSH, Pointer(to=self.term_raw)
@@ -429,8 +451,16 @@ struct TermFrontend(Frontable):
     def should_quit(self) -> Bool:
         return self.quit_requested
 
+    def reset_keys(mut self):
+        var time: Int
+        for a in range(UInt16(16)):
+            time = perf_counter_ns() - self.keys_down_time[a]
+            if time >= Self.KEY_DOWN_TIMEOUT:
+                self.keys_down_time[a] = 0
+                self.keys_down_byte &= ~(1 << a)
+
     def poll_keys(mut self) -> UInt16:
-        self.keys_down_byte = 0
+        self.reset_keys()
         # read from stdin into the keys buffer
         self.num_keys = external_call["read", Int](
             fd, Pointer(to=self.key_buf), 16
@@ -443,7 +473,8 @@ struct TermFrontend(Frontable):
                 continue
             elif key == 0xF1:
                 continue
-            self.keys_down_byte |= 0x1 << UInt16(key)
+            self.keys_down_byte |= 1 << UInt16(key)
+            self.keys_down_time[key] = perf_counter_ns() // 1000000
 
         return self.keys_down_byte
 
