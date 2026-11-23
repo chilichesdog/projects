@@ -262,7 +262,7 @@ struct Core[version: CHIP8Model = CHIP8Model.STANDARD]:
                                 self.pc -= 2
                         else:
                             if self.keys_down == 0x0:
-                                self.v[x] = key
+                                self.v[x] = self.waiting_key.value()
                                 self.waiting_key = None
                             else:
                                 self.pc -= 2
@@ -348,7 +348,7 @@ struct Emulator[F: Frontable]:
                 break
 
             # CHANGE RANGE
-            for _ in range(12):
+            for _ in range(Int(self.args[2])):
                 self.CHIP8.step()
 
             self.CHIP8.tick_timers()
