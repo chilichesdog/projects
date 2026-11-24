@@ -4,6 +4,8 @@
 _mojo-debug/
 a.out
 main
+games/
+test.*
 
 # third-party test ROMs
 chip8/chip8-test-suite/
